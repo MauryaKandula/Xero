@@ -1,0 +1,6 @@
+{
+  "name": "XERO — Desktop AI Companion & Studio",
+  "description": "Floating animated Dynamic Island AI companion (XERO) with expressive personality, independent XERO Studio control centre, offline built-in engine, local LLM support (Ollama/LM Studio), and server-side Gemini integration.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

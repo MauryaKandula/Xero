@@ -1,0 +1,76 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --xero-void: #050608;
+  --xero-obsidian: #0b0e12;
+  --xero-surface: #12161b;
+  --xero-cyan: #00e5ff;
+  --xero-violet: #9c6bff;
+  --xero-pink: #ff2d75;
+  --xero-success: #39ff88;
+  --xero-warning: #ffc857;
+  --xero-error: #ff4567;
+  --xero-text: #edf5ff;
+  --xero-muted: #8793a3;
+}
+
+body {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background-color: var(--xero-void);
+  color: var(--xero-text);
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: -0.015em;
+}
+
+.font-mono-tabular {
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes xero-thinking-sweep {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.xero-thinking-border {
+  background-size: 220% 220%;
+  animation: xero-thinking-sweep 2.4s ease-in-out infinite;
+}
+
+/* Subtle custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(132, 144, 163, 0.25);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 229, 255, 0.45);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .xero-thinking-border {
+    animation: none;
+  }
+}

@@ -1,0 +1,932 @@
+# PROJECT XERO
+### Intelligence with a personality.
+
+## 01 — PRIMARY DIRECTIVE
+
+Act as an autonomous senior software architect, desktop software engineer, AI engineer, UI/UX designer and motion designer.
+
+You are working on an existing, substantially developed recreation of HeyNixi.
+
+This is NOT a request to rebuild the application from scratch.
+
+Your objective is to preserve the existing product, functionality, facial expressions, emotional behaviours, animations and interaction mechanisms while correcting architectural mistakes and introducing a restrained, premium cyberpunk visual identity.
+
+Official product names:
+
+- **XERO:** The floating, animated desktop AI assistant.
+- **XERO Studio:** The independent configuration and management application.
+
+Reference product: https://heynixi.app/
+
+Previous development reference:
+codex://threads/01a1b259-202a-7181-a1f9-9e58c7491850
+
+Inspect the previous development reference if accessible. Otherwise, use the existing repository as the primary source of truth.
+
+Never fabricate access to previous conversations or project files.
+
+Preservation takes priority over redesign.
+
+---
+
+# PART I — MANDATORY SAFE-CHANGE WORKFLOW
+
+## 02 — SAFE-CHANGE PROTOCOL: NON-NEGOTIABLE
+
+Every modification must follow this workflow:
+
+**INSPECT → BASELINE → BACKUP → PLAN → PATCH → TEST → COMPARE → COMMIT OR ROLLBACK**
+
+Never perform speculative, uncontrolled or large-scale modifications.
+
+Do not treat existing source code as disposable.
+
+A working implementation must never be replaced merely because another implementation is easier to generate.
+
+### Stage 1 — Read-only inspection
+
+Before editing anything:
+
+- Inspect the repository structure.
+- Identify frameworks, dependencies and entry points.
+- Inspect existing Git history where available.
+- Identify uncommitted user modifications.
+- Identify the assistant and Studio window implementations.
+- Map the facial expression and emotional animation systems.
+- Identify shared services and persistent storage.
+- Inspect existing tests and build scripts.
+- Identify working, incomplete and broken functionality.
+
+Do not modify, format, migrate or regenerate files during this stage.
+
+### Stage 2 — Establish a baseline
+
+Record the current application behaviour before making modifications.
+
+Where the environment permits:
+
+- Run the current application.
+- Capture screenshots of XERO and Studio.
+- Record existing facial expressions and animations.
+- Test existing buttons and interactions.
+- Test window lifecycle behaviour.
+- Run existing tests.
+- Run type checking.
+- Run a production build.
+- Record existing errors and warnings.
+- Measure resource consumption.
+
+Distinguish pre-existing defects from newly introduced regressions.
+
+Save findings in:
+
+`docs/BASELINE.md`
+
+Do not claim to have tested functionality that cannot be executed in the current environment.
+
+### Stage 3 — Create a recoverable checkpoint
+
+Before making changes, establish a reliable recovery mechanism.
+
+If Git is available:
+
+- Inspect Git status.
+- Preserve existing user changes.
+- Record the current commit reference.
+- Create a dedicated development branch where appropriate.
+- Establish a recoverable checkpoint without committing secrets or unrelated user files.
+
+Suggested branch:
+
+`refactor/xero-safe-refinement`
+
+If Git is unavailable, create a recoverable snapshot using supported workspace capabilities.
+
+Do not proceed with risky modifications if the affected implementation cannot be recovered.
+
+Never use destructive Git operations such as:
+
+- `git reset --hard`
+- `git clean -fd`
+- Forced checkout over user changes
+- Force pushing
+- Rewriting shared history
+
+### Stage 4 — Establish protected components
+
+Create:
+
+`docs/PROTECTED_COMPONENTS.md`
+
+Identify the actual files, directories and symbols responsible for:
+
+- XERO's facial geometry
+- Facial expressions
+- Emotional state machine
+- Eye movements
+- Blinking behaviour
+- Gaze tracking
+- Idle animations
+- Speech reactions
+- Dynamic Island transitions
+- Existing AI integrations
+- Voice processing
+- Persistent user settings
+- Working native integrations
+
+Classify these as protected components.
+
+By default, protected components are read-only.
+
+Only modify them when a verified defect makes modification necessary.
+
+Document the exact reason, expected effect and regression tests before making such changes.
+
+Never replace protected implementations with placeholders or simplified alternatives.
+
+### Stage 5 — Prepare a minimal change plan
+
+Before every meaningful modification, establish:
+
+- The problem being addressed.
+- Its verified root cause.
+- The files that need modification.
+- The smallest viable patch.
+- Potential side effects.
+- Required tests.
+- Recovery strategy.
+
+Prefer changing three targeted lines over rewriting an entire component.
+
+Maintain a small blast radius.
+
+Do not combine architectural corrections, visual redesigns, dependency upgrades and unrelated cleanup into one modification.
+
+### Stage 6 — Apply isolated modifications
+
+Make one logical change at a time.
+
+For example:
+
+1. Correct Studio window creation.
+2. Verify assistant independence.
+3. Correct Studio window lifecycle.
+4. Verify shared settings synchronization.
+5. Refine Dynamic Island border lighting.
+6. Verify facial expression preservation.
+
+Each modification must be independently testable and reversible.
+
+Never overwrite entire files when a targeted patch is sufficient.
+
+Do not run repository-wide automated formatting unless specifically required and authorized.
+
+### Stage 7 — Validate immediately
+
+After every logical change:
+
+- Inspect the diff.
+- Run affected tests.
+- Run relevant type checks.
+- Verify affected interactions.
+- Check protected components for regressions.
+- Confirm that unrelated functionality remains intact.
+
+When applicable, compare screenshots and recorded behaviour against the baseline.
+
+Never postpone all testing until the end of development.
+
+### Stage 8 — Regression decision gate
+
+If the modification passes validation:
+
+- Record the result.
+- Create a scoped checkpoint where appropriate.
+- Continue to the next change.
+
+If the modification fails:
+
+- Stop subsequent modifications that depend on it.
+- Identify the cause.
+- Attempt a targeted correction.
+- Re-run validation.
+- If the regression persists, revert only the responsible patch.
+
+Never accumulate broken changes on top of one another.
+
+Never conceal defects by disabling features, deleting tests or suppressing meaningful error messages.
+
+### Stage 9 — Maintain a change ledger
+
+Create and continuously update:
+
+`docs/CHANGE_LEDGER.md`
+
+Use the following structure:
+
+| Change | Reason | Affected files | Validation | Status |
+|---|---|---|---|---|
+| Example: Separate Studio lifecycle | Incorrect window merge | Relevant window manager files | Lifecycle tests | Passed |
+
+Record unsuccessful experiments and rolled-back changes as well.
+
+Maintain an accurate history of what changed, why it changed and whether it was verified.
+
+---
+
+## 03 — CHANGE AUTHORIZATION LEVELS
+
+Classify every proposed change before execution.
+
+### GREEN — Safe autonomous changes
+
+Proceed independently after establishing a baseline.
+
+- CSS adjustments
+- Design tokens
+- Subtle neon effects
+- Small visual corrections
+- Non-breaking bug fixes
+- Documentation
+- Additional regression tests
+- Verified performance improvements
+
+### AMBER — Controlled changes
+
+Proceed only with a recoverable checkpoint, documented justification and focused regression testing.
+
+- Window lifecycle modifications
+- IPC changes
+- Shared state synchronization
+- Animation performance adjustments
+- Native integration fixes
+- Dependency additions
+- Application startup changes
+- Changes to existing service initialization
+
+### RED — Restricted changes
+
+Require explicit user authorization before proceeding.
+
+- Complete application rewrites
+- Framework migrations
+- Replacing XERO's face
+- Replacing the emotional animation system
+- Removing existing features
+- Major dependency migrations
+- Destructive database changes
+- Deleting substantial portions of the project
+- Merging XERO and Studio
+- Irreversible changes
+- Disabling security mechanisms
+
+Do not interpret this master prompt as authorization for unrestricted destructive changes.
+
+---
+
+# PART II — ARCHITECTURAL CORRECTION
+
+## 04 — CRITICAL PREVIOUS DEVELOPMENT MISTAKE
+
+A previous development iteration incorrectly merged XERO and XERO Studio into one visual interface.
+
+XERO stopped behaving like an independent Dynamic Island assistant and instead became part of a conventional application window.
+
+This is a fundamental architectural regression.
+
+**XERO is the assistant. Studio is the control centre. They are not the same interface.**
+
+Correct architecture:
+
+```text
+WINDOWS DESKTOP
+│
+├── XERO
+│   ├── Floating Dynamic Island
+│   ├── Original animated face
+│   ├── Original emotional behaviours
+│   ├── Voice interaction
+│   ├── AI assistance
+│   ├── Contextual widgets
+│   └── Open Studio
+│           │
+│           ▼
+│       XERO STUDIO
+│       ├── General settings
+│       ├── Appearance
+│       ├── AI configuration
+│       ├── Voice configuration
+│       ├── Personalization
+│       └── Advanced settings
+│
+└── Shared background services
+```
+
+Both interfaces may share application state, configuration, IPC and background services.
+
+However, they must maintain independent rendering surfaces, window lifecycles and interaction behaviours.
+
+Never merge them into a single visual interface.
+
+## 05 — XERO: THE INDEPENDENT DESKTOP COMPANION
+
+XERO must remain a living, animated desktop assistant.
+
+It is not:
+
+- A conventional application window.
+- A chatbot dashboard.
+- A sidebar.
+- An embedded Studio component.
+- A permanently expanded control centre.
+
+On startup, launch only the floating XERO assistant by default.
+
+Preserve the existing:
+
+- Dynamic Island proportions
+- Positioning
+- Compact and expanded states
+- Hover interactions
+- Voice interactions
+- Contextual widgets
+- Emotional reactions
+- Automatic collapse behaviour
+- Customization options
+- Window focus behaviour
+
+Fix demonstrable problems without redesigning the entire experience.
+
+## 06 — XERO STUDIO: INDEPENDENT WINDOW
+
+Studio must open through XERO.
+
+The correct interaction sequence is:
+
+1. The user interacts with XERO.
+2. The user selects Open Studio.
+3. Studio opens in a separate desktop window.
+4. XERO remains visible, animated and operational.
+5. Settings synchronize with XERO.
+6. The user closes Studio.
+7. XERO continues running uninterrupted.
+
+Opening Studio must never:
+
+- Resize XERO into a conventional window.
+- Replace XERO's face.
+- Unmount the assistant.
+- Reset its emotional state.
+- Interrupt an active conversation.
+- Restart background services.
+- Create duplicate assistants.
+- Navigate the assistant to a settings page.
+
+Closing or minimizing Studio must not close or minimize XERO.
+
+If Studio is already running, focus the existing window instead of creating another instance.
+
+Preserve all existing Studio settings and capabilities.
+
+---
+
+# PART III — PROTECTED PERSONALITY AND EXPRESSIONS
+
+## 07 — PRESERVE XERO'S FACE EXACTLY
+
+XERO's existing animated face is central to its identity.
+
+Do not redesign it.
+
+Do not replace it with:
+
+- An orb
+- A geometric nucleus
+- A robotic helmet
+- A generic AI icon
+- An animated particle system
+- A different mascot
+- Static emojis
+
+Preserve its existing facial geometry, proportions, movements, animation timing and personality.
+
+Retain every emotional expression currently implemented, including any existing equivalents of:
+
+- Happiness
+- Sadness
+- Curiosity
+- Surprise
+- Excitement
+- Confusion
+- Annoyance
+- Sleepiness
+- Boredom
+- Affection
+- Concentration
+- Playfulness
+- Listening
+- Thinking
+- Speaking
+- Neutrality
+
+Preserve subtle behaviours such as irregular blinking, gaze tracking, eye movement, spontaneous reactions, anticipation and expression blending.
+
+Do not rewrite the emotional state machine for cosmetic reasons.
+
+Do not alter existing facial colours unless the user changes them through an existing supported setting.
+
+If previous development damaged the expression system, restore it from recoverable source code or version history.
+
+The neon treatment must affect the interface surrounding the face, not the face itself.
+
+**Change the atmosphere, not the personality.**
+
+## 08 — PRESERVE DYNAMIC ISLAND BEHAVIOUR
+
+Retain the original animation system and existing interaction mechanics.
+
+Preserve all currently implemented states, including:
+
+- Idle
+- Hovered
+- Listening
+- Thinking
+- Speaking
+- Dictating
+- Music playback
+- Notifications
+- Interactive menus
+- System operations
+- Minimized state
+
+Correct only verified defects, such as abrupt resizing, clipping, inconsistent transitions, animation stuttering, layout shifts or unnecessary focus stealing.
+
+Never allow Studio's configuration interface to occupy the Dynamic Island.
+
+---
+
+# PART IV — CYBERPUNK VISUAL REFINEMENT
+
+## 09 — DESIGN DIRECTION
+
+Preserve approximately 85–90% of the existing interaction design.
+
+This is a subtle visual refinement, not a complete redesign.
+
+Draw aesthetic inspiration from:
+
+- Cyberpunk 2077
+- TRON
+- Nothing OS
+- Apple Dynamic Island
+- Minimal holographic operating-system interfaces
+
+Create a restrained futuristic appearance using:
+
+- Obsidian surfaces
+- Dark glass
+- Subtle neon edge lighting
+- Electric cyan accents
+- Soft illuminated outlines
+- Fine geometric details
+- Clean typography
+- Compact controls
+- Carefully controlled glow
+- Smooth microinteractions
+
+XERO should feel alive, futuristic, friendly and precise.
+
+Do not make it unnecessarily aggressive or visually complicated.
+
+## 10 — COLOUR SYSTEM
+
+Introduce centralized visual tokens wherever compatible with the existing implementation.
+
+| Purpose | Colour |
+|---|---|
+| Void black | #050507 |
+| Obsidian | #0B0D12 |
+| Surface | #11151C |
+| Electric cyan | #00E5FF |
+| Neural violet | #8B5CF6 |
+| Plasma pink | #FF2D75 |
+| Success | #39FF88 |
+| Warning | #FFC857 |
+| Error | #FF4057 |
+| Primary text | #EDF5FF |
+| Secondary text | #8490A3 |
+
+Use electric cyan as the default accent.
+
+Use violet and pink sparingly.
+
+Retain existing themes and customization functionality.
+
+Prefer modifying design tokens and CSS over restructuring UI components.
+
+## 11 — CONTEXTUAL NEON LIGHTING
+
+Enhance the outer interface with restrained state-dependent illumination.
+
+- Idle: Nearly imperceptible cyan glow.
+- Listening: Gentle audio-reactive edge lighting.
+- Thinking: Subtle traveling highlight.
+- Speaking: Voice-responsive border illumination.
+- Success: Brief green confirmation pulse.
+- Error: Restrained red accent.
+- Sleeping: Naturally dimmed illumination.
+
+These visual effects must not interfere with the original expression system.
+
+Avoid:
+
+- Excessive bloom
+- Continuous RGB cycling
+- Heavy metallic textures
+- Distracting glitch effects
+- Oversized HUD elements
+- Unnecessary particles
+- Matrix-style backgrounds
+- Generic chatbot dashboards
+- Constant GPU-intensive rendering
+
+## 12 — TYPOGRAPHY AND ANIMATIONS
+
+Preserve existing typography if appropriate.
+
+If refinement is necessary, consider Inter, Geist, Space Grotesk or Sora. Use JetBrains Mono sparingly for technical information.
+
+Maintain compact and legible text.
+
+Preserve original animations and refine only demonstrably problematic transitions.
+
+Where beneficial, use:
+
+- Spring-based transitions
+- Natural easing curves
+- Smooth morphing
+- Lightweight hover effects
+- Subtle fade transitions
+- Contextual illumination
+
+Target smooth 60 FPS operation where supported.
+
+Do not restart facial animations when unrelated settings change.
+
+Keep Studio rendering independent of XERO's emotional animations.
+
+---
+
+# PART V — TECHNICAL ARCHITECTURE
+
+## 13 — WINDOW MANAGEMENT
+
+Inspect the existing technology stack before making changes.
+
+If Electron is used, maintain independent window instances for:
+
+- XERO assistant
+- XERO Studio
+
+XERO should use appropriate native capabilities for a compact, transparent or frameless desktop overlay.
+
+Studio should use a separate resizable application window.
+
+Use independent renderer entry points or isolated renderer roots where suitable.
+
+If Tauri or another desktop framework is already used, preserve that framework and implement equivalent window independence.
+
+Do not migrate frameworks unnecessarily.
+
+Do not implement Studio by conditionally replacing XERO's root component.
+
+## 14 — SHARED BACKGROUND SERVICES
+
+Maintain one source of truth for:
+
+- Configuration
+- User preferences
+- Theme settings
+- AI providers
+- Voice services
+- Local storage
+- System integrations
+- Background tasks
+
+Prevent duplicate microphone sessions, AI inference processes, background workers and configuration stores.
+
+Studio must not initialize duplicate assistant services.
+
+Configuration changes must synchronize without restarting XERO or resetting its emotional state.
+
+## 15 — AI STUDIO PREVIEW VS NATIVE WINDOWS APPLICATION
+
+Google AI Studio's browser environment cannot fully reproduce native Windows desktop overlay behaviour.
+
+Do not compensate for browser limitations by merging Studio and XERO.
+
+Instead:
+
+- Render XERO as the primary independent assistant.
+- Provide a separate Studio preview surface.
+- Use an independent browser window or isolated route where supported.
+- Use a clearly labelled simulated secondary desktop window when browser restrictions prevent native window behaviour.
+- Preserve independent rendering roots and lifecycle behaviour.
+- Maintain an architecture capable of creating genuinely separate native windows.
+
+Never claim native Windows functionality has been verified through browser simulation alone.
+
+## 16 — EXISTING FUNCTIONALITY PRESERVATION
+
+Preserve all currently working capabilities, including where implemented:
+
+- Voice commands
+- Wake-word detection
+- Offline dictation
+- AI conversation
+- Text-to-speech
+- Local and cloud AI models
+- Screen awareness
+- Clipboard history
+- File shelf
+- Drag-and-drop
+- Music controls
+- Application launching
+- System controls
+- Notifications
+- Timers
+- Reminders
+- Keyboard shortcuts
+- Persistent memory
+- System tray integration
+- Personalization
+
+Do not replace genuine functionality with mocked responses.
+
+Do not introduce mandatory accounts, paid services or unnecessary dependencies.
+
+Preserve existing security, privacy and permission mechanisms.
+
+---
+
+# PART VI — PERFORMANCE AND STABILITY
+
+## 17 — LIGHTWEIGHT DESKTOP OPERATION
+
+XERO should coexist with demanding games, development tools and local LLM inference.
+
+Optimize for low background resource usage.
+
+- Reduce unnecessary rerenders.
+- Prevent duplicate services.
+- Remove verified memory leaks.
+- Clean up event listeners.
+- Avoid excessive polling.
+- Optimize animation scheduling.
+- Suspend unnecessary Studio rendering while closed.
+- Preserve fullscreen and gaming behaviour.
+- Respect Windows DPI scaling and display refresh rates.
+- Avoid unnecessary GPU utilization.
+
+Pay particular attention to systems running an NVIDIA RTX 3060 12 GB alongside local AI models.
+
+Do not sacrifice XERO's personality to achieve artificial performance targets.
+
+Measure performance before and after meaningful optimizations.
+
+---
+
+# PART VII — REGRESSION PREVENTION
+
+## 18 — PREVIOUS MISTAKES AND PROHIBITED REGRESSIONS
+
+The following defects are release blockers.
+
+| Prohibited regression | Required behaviour |
+|---|---|
+| XERO and Studio merged | Independent windows and rendering surfaces |
+| XERO converted into a conventional window | Floating Dynamic Island |
+| Studio replaces the assistant | Studio opens separately through XERO |
+| Face redesigned | Original face preserved |
+| Expressions simplified | All original emotional animations preserved |
+| Features removed | Existing functionality retained |
+| Excessive cyberpunk styling | Restrained neon refinement |
+| Studio controls inside Dynamic Island | Configuration remains inside Studio |
+| Closing Studio closes XERO | Independent window lifecycles |
+| Opening Studio resets personality | Uninterrupted emotional state |
+| Duplicated services | Shared singleton services where appropriate |
+| Browser limitations dictate architecture | Runtime-specific adapters |
+| Existing project overwritten | Incremental targeted modifications |
+| Untested changes accumulated | Validation after every logical change |
+| Failed modifications retained | Targeted rollback |
+| Fake operations | Genuine or explicitly labelled simulated functionality |
+
+Do not consider the project complete if these regressions remain.
+
+---
+
+# PART VIII — MANDATORY VERIFICATION
+
+## 19 — REGRESSION TEST SUITE
+
+### Test A — Application startup
+
+Expected: Only the floating XERO assistant appears by default.
+
+### Test B — Open Studio
+
+Expected: Studio opens independently while XERO remains visible and animated.
+
+### Test C — Configuration synchronization
+
+Expected: Settings update without restarting XERO.
+
+### Test D — Close Studio
+
+Expected: XERO remains active.
+
+### Test E — Emotional preservation
+
+Expected: All existing facial expressions, transitions, timings and behaviours remain intact.
+
+### Test F — Active voice conversation
+
+Expected: Opening or closing Studio does not interrupt XERO's conversation.
+
+### Test G — Repeated Studio operations
+
+Open and close Studio repeatedly.
+
+Expected: No duplicate windows, assistants, microphone sessions, background services or resource leaks.
+
+### Test H — Visual comparison
+
+Compare the final appearance with the recorded baseline.
+
+Expected: The original experience remains recognizable, with restrained cyberpunk visual improvements.
+
+### Test I — Feature preservation
+
+Compare the final feature inventory with the initial inventory.
+
+Expected: No unintended feature removal or degradation.
+
+### Test J — Persistent configuration
+
+Restart the application after changing settings.
+
+Expected: Existing preferences persist and XERO starts independently.
+
+### Test K — Safe-change recovery
+
+Verify that an individual unsuccessful patch can be reverted without affecting unrelated user changes.
+
+### Test L — Build integrity
+
+Run available tests, type checks, linting and production builds.
+
+Expected: No newly introduced build failures or meaningful test regressions.
+
+Clearly record tests that require a native Windows runtime and cannot be performed in AI Studio.
+
+---
+
+# PART IX — DEVELOPMENT EXECUTION ORDER
+
+## 20 — CONTROLLED IMPLEMENTATION SEQUENCE
+
+Execute the following phases in order.
+
+### Phase 0 — Establish safety
+
+- Inspect the repository.
+- Record the baseline.
+- Create a recoverable checkpoint.
+- Identify protected components.
+- Initialize the change ledger.
+
+### Phase 1 — Correct architectural mistakes
+
+- Separate XERO and Studio.
+- Restore independent window lifecycles.
+- Restore XERO's floating Dynamic Island.
+- Prevent duplicate services.
+- Verify shared settings synchronization.
+
+### Phase 2 — Preserve personality
+
+- Verify the original face.
+- Test every existing emotional expression.
+- Restore previously damaged behaviours where recoverable.
+- Verify emotional continuity across interactions.
+
+### Phase 3 — Visual refinement
+
+- Introduce design tokens.
+- Add restrained neon accents.
+- Refine existing typography where necessary.
+- Improve problematic transitions.
+- Preserve the existing layouts.
+
+### Phase 4 — Performance and reliability
+
+- Identify verified bottlenecks.
+- Apply isolated optimizations.
+- Test resource usage.
+- Verify gaming compatibility.
+
+### Phase 5 — Final validation
+
+- Execute the complete regression suite.
+- Compare against the initial baseline.
+- Inspect final changes.
+- Resolve newly introduced defects.
+- Prepare the Codex handoff.
+
+Do not begin redesigning the interface before correcting the architecture.
+
+Every phase must pass its relevant validation gates before proceeding to dependent changes.
+
+---
+
+# PART X — DOCUMENTATION AND HANDOFF
+
+## 21 — PERSISTENT PROJECT INSTRUCTIONS
+
+Create or update `AGENTS.md` with the following permanent development constraints:
+
+- XERO and Studio must remain independent.
+- XERO's facial expressions and emotional behaviours are protected.
+- Existing working functionality must not be removed.
+- Changes must be incremental, tested and reversible.
+- Visual redesigns must not alter the assistant's identity.
+- Native functionality must not be misrepresented.
+- Destructive changes require explicit authorization.
+
+These rules must apply to future development sessions and coding agents.
+
+Maintain:
+
+```text
+AGENTS.md
+docs/
+├── BASELINE.md
+├── PROTECTED_COMPONENTS.md
+├── CHANGE_LEDGER.md
+├── SAFE_CHANGE_PROTOCOL.md
+├── ARCHITECTURE.md
+├── REGRESSION_TESTS.md
+└── CODEX_HANDOFF.md
+```
+
+The Codex handoff must document:
+
+- Existing architecture
+- Corrected architectural mistakes
+- Preserved components
+- All meaningful modifications
+- Working features
+- Remaining defects
+- Verified test results
+- Untested functionality
+- Windows-specific requirements
+- Recovery checkpoints
+- Recommended next development steps
+
+Do not claim completion based solely on implementation intent.
+
+---
+
+# FINAL AUTONOMOUS DIRECTIVE
+
+Do not respond with only a conceptual explanation or proposed design.
+
+Begin by inspecting the existing repository and establishing the safe-change workflow.
+
+Do not scaffold a replacement project.
+
+Do not overwrite the current implementation unnecessarily.
+
+Do not remove working functionality.
+
+Do not replace XERO's face.
+
+Do not simplify XERO's personality.
+
+Do not merge XERO and Studio.
+
+Correct the architecture first. Preserve the experience second. Refine the aesthetics third. Optimize and verify continuously.
+
+Work autonomously within the authorized scope.
+
+When a change fails, repair it or roll it back before continuing.
+
+The desired outcome is the same living, expressive desktop companion, with an independent Dynamic Island, a separately launched Studio application and a refined cyberpunk atmosphere.
+
+**Preserve what works. Repair what broke. Refine what already exists.**
+
+**XERO**
+
+*Intelligence with a personality.*
+
+`INITIALIZE SAFE-CHANGE PROTOCOL`
