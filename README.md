@@ -32,12 +32,9 @@ GEMINI_API_KEY="your-key-here"
 - **Offline Core**: Zero-network built-in engine for math, timers, reminders, ambient synth music, clipboard history, file shelf, persistent memory, and companion reactions.
 - **Local LLM**: Configure Ollama (`http://127.0.0.1:11434`) or LM Studio / llama.cpp (`http://127.0.0.1:1234/v1`) inside **XERO Studio → AI & Local LLM**.
 
-## Publish to GitHub
+## Project source
 
-```bash
-git remote add origin https://github.com/<your-github-username>/Xero.git
-git push -u origin main
-```
+This project is maintained at [MauryaKandula/Xero](https://github.com/MauryaKandula/Xero).
 
 ## Verification
 
@@ -46,3 +43,8 @@ npx --yes tsx --test src/core/core.test.ts
 npm run lint
 npm run build
 ```
+
+
+## Copyright & third-party terms
+
+© 2026 Kandula Paul Saketh Maurya for the original Xero code and project documentation. Third-party libraries, services, data, and media remain subject to their own terms. This repository does not include a separate project-wide reuse license.
