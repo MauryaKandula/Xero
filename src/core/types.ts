@@ -104,6 +104,7 @@ export type StudioTab =
   | 'general'
   | 'appearance'
   | 'ai'
+  | 'health'
   | 'voice'
   | 'personalization'
   | 'expressions'
@@ -121,6 +122,7 @@ export interface XeroSettings {
     gamingMode: boolean;
     alwaysOnTopSim: boolean;
     autoCollapseMs: number;
+    autoHideDelayMs?: number;
     hotkeyLabel: string;
     soundEffects: boolean;
     spontaneousBehavior: boolean;
@@ -141,6 +143,8 @@ export interface XeroSettings {
   ai: {
     providerMode: AIProviderMode;
     geminiModel: 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite';
+    liveModel: 'gemini-3.8-live' | 'gemini-3.8-live-extended-thinking';
+    liveVoiceName: 'Kore' | 'Zephyr';
     localFormat: LocalLLMFormat;
     localEndpoint: string;
     localModel: string;
@@ -164,12 +168,41 @@ export interface XeroSettings {
   };
   privacy: {
     captureClipboardHistory: boolean;
+    persistChatHistory: boolean;
+    retainAudioRecordings: boolean;
   };
   personalization: {
     assistantName: string;
     userName: string;
     personalityTone: PersonalityTone;
   };
+}
+
+export type ResponseDepth = 'concise' | 'balanced' | 'detailed';
+
+export type LiveSessionPhase =
+  | 'idle'
+  | 'connecting'
+  | 'connected'
+  | 'listening'
+  | 'speaking'
+  | 'reconnecting'
+  | 'error';
+
+export interface LiveLatencyMetrics {
+  micActivationMs: number | null;
+  firstResponseMs: number | null;
+  interruptToSilenceMs: number | null;
+  reconnectCount: number;
+}
+
+export interface PendingConfirmation {
+  id: string;
+  kind: 'destructive' | 'preference';
+  summary: string;
+  actionType: string;
+  payload?: Record<string, string | number | boolean | string[]>;
+  createdAt: number;
 }
 
 export interface ChatMessage {
@@ -179,6 +212,7 @@ export interface ChatMessage {
   timestamp: number;
   provider?: 'offline' | 'local-llm' | 'gemini';
   emotion?: EmotionState;
+  actionsApplied?: string[];
 }
 
 export interface TimerItem {
@@ -319,4 +353,14 @@ export interface SystemStatusSnapshot {
   keyboardLang: string;
   audioOutputCount: number | null;
   wakeLockActive: boolean;
+}
+
+export interface LlmInferenceMetric {
+  id: string;
+  timestamp: number;
+  provider: 'offline' | 'local-llm' | 'gemini';
+  model: string;
+  latencyMs: number;
+  outputChars: number;
+  tokensPerSec: number;
 }

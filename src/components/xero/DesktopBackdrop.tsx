@@ -45,7 +45,23 @@ export const DesktopBackdrop: React.FC = () => {
   const brightnessOpacity = Math.max(0, Math.min(0.65, (100 - systemStatus.brightness) / 100));
 
   return (
-    <div className="min-h-screen w-full relative overflow-hidden bg-[#050608] text-[#EDF5FF]">
+    <div
+      className="min-h-screen w-full relative overflow-hidden text-[#EDF5FF]"
+      style={{
+        background:
+          'radial-gradient(125% 115% at 88% 95%, #1A2842 0%, #121B2E 32%, #0D1320 62%, #090C14 100%)',
+      }}
+    >
+      {/* Subtle architectural curved arcs reminiscent of HeyNixi wallpaper in dark obsidian */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-0 overflow-hidden opacity-45"
+      >
+        <div className="absolute -right-[14%] -bottom-[38%] w-[82vw] h-[82vw] rounded-full bg-white/[0.025]" />
+        <div className="absolute -right-[4%] -bottom-[26%] w-[58vw] h-[58vw] rounded-full bg-[#3B82F6]/[0.05]" />
+        <div className="absolute right-[8%] -bottom-[14%] w-[36vw] h-[36vw] rounded-full bg-[#60A5FA]/[0.06]" />
+      </div>
+
       {/* Real preview optical dimmer & Night Light tint */}
       {(systemStatus.nightLight || brightnessOpacity > 0) && (
         <div

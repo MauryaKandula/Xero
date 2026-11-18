@@ -6,6 +6,7 @@ import {
   EMOTION_SPECS,
   clampGazeOffset,
   nextBlinkIntervalMs,
+  smoothGazeStep,
 } from '../../core/emotions';
 
 interface XeroFaceProps {
@@ -26,9 +27,9 @@ interface XeroFaceProps {
 
 const EYE_SPRING = {
   type: 'spring' as const,
-  stiffness: 440,
-  damping: 26,
-  mass: 0.55,
+  stiffness: 380,
+  damping: 28,
+  mass: 0.56,
 };
 
 const HEAD_SPRING = {
@@ -36,6 +37,20 @@ const HEAD_SPRING = {
   stiffness: 320,
   damping: 22,
   mass: 0.65,
+};
+
+const GAZE_EYE_SPRING = {
+  type: 'spring' as const,
+  stiffness: 155,
+  damping: 20,
+  mass: 0.9,
+};
+
+const GAZE_HEAD_SPRING = {
+  type: 'spring' as const,
+  stiffness: 110,
+  damping: 18,
+  mass: 1.05,
 };
 
 /**
@@ -63,6 +78,7 @@ export const XeroFace: React.FC<XeroFaceProps> = React.memo(
   }) => {
     const svgRef = useRef<SVGSVGElement | null>(null);
     const gazeRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+    const targetGazeRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
     const lastPointerAtRef = useRef<number>(0);
     const [isBlinking, setIsBlinking] = useState(false);
     const [gaze, setGaze] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -141,61 +157,86 @@ export const XeroFace: React.FC<XeroFaceProps> = React.memo(
       };
     }, [emotion, reducedMotion]);
 
-    // RAF-throttled smooth 2D gaze glide + gentle autonomous look-around when idle
+    // Lightweight damped lag gaze glide across ALL 16 emotions (zero CPU when settled)
     useEffect(() => {
       if (reducedMotion || !interactiveGaze) {
         gazeRef.current = { x: 0, y: 0 };
+        targetGazeRef.current = { x: 0, y: 0 };
         setGaze({ x: 0, y: 0 });
         return;
       }
 
-      if (emotion === 'thinking') {
-        const glanceTimer = window.setInterval(() => {
-          if (document.visibilityState !== 'visible') return;
-          setGaze((prev) => ({ x: prev.x > 0 ? -3.4 : 3.4, y: -2.0 }));
-        }, 950);
-        setGaze({ x: 3.2, y: -2.0 });
-        return () => window.clearInterval(glanceTimer);
-      }
-
-      // Autonomous curious glance if mouse has been stationary > 3.5s
-      const idleGlanceTimer = window.setInterval(() => {
-        if (document.visibilityState !== 'visible') return;
-        if (Date.now() - lastPointerAtRef.current < 3500) return;
-        const dirs = [
-          { x: -3.0, y: -0.6 },
-          { x: 3.0, y: -0.6 },
-          { x: 0, y: 0 },
-          { x: 1.8, y: 1.4 },
-        ];
-        const next = dirs[Math.floor(Math.random() * dirs.length)];
-        gazeRef.current = next;
-        setGaze(next);
-      }, 4200);
-
-      let rafId = 0;
+      let glideRafId = 0;
+      let pointerComputeRafId = 0;
+      let lastStepTime = 0;
       let pendingX = 0;
       let pendingY = 0;
 
+      const stepGlide = (now: number) => {
+        glideRafId = 0;
+        if (lastStepTime !== 0 && now - lastStepTime < 20) {
+          glideRafId = window.requestAnimationFrame(stepGlide);
+          return;
+        }
+        lastStepTime = now;
+        const next = smoothGazeStep(gazeRef.current, targetGazeRef.current, 0.16);
+        const changed =
+          Math.abs(next.x - gazeRef.current.x) >= 0.03 ||
+          Math.abs(next.y - gazeRef.current.y) >= 0.03 ||
+          next.settled;
+        gazeRef.current = { x: next.x, y: next.y };
+        if (changed) {
+          setGaze({ x: next.x, y: next.y });
+        }
+        if (!next.settled) {
+          glideRafId = window.requestAnimationFrame(stepGlide);
+        }
+      };
+
+      const startGlideLoop = () => {
+        if (glideRafId === 0) {
+          lastStepTime = 0;
+          glideRafId = window.requestAnimationFrame(stepGlide);
+        }
+      };
+
+      // Autonomous curious glance if mouse has been stationary (>2.0s when thinking, >3.5s otherwise)
+      const idleGlanceTimer = window.setInterval(() => {
+        if (document.visibilityState !== 'visible' || emotion === 'sleepy') return;
+        const idleThreshold = emotion === 'thinking' ? 2000 : 3500;
+        if (Date.now() - lastPointerAtRef.current < idleThreshold) return;
+        const dirs =
+          emotion === 'thinking'
+            ? [
+                { x: -3.4, y: -2.0 },
+                { x: 3.4, y: -2.0 },
+              ]
+            : [
+                { x: -3.0, y: -0.6 },
+                { x: 3.0, y: -0.6 },
+                { x: 0, y: 0 },
+                { x: 1.8, y: 1.4 },
+              ];
+        targetGazeRef.current = dirs[Math.floor(Math.random() * dirs.length)];
+        startGlideLoop();
+      }, emotion === 'thinking' ? 1200 : 4200);
+
       const handlePointerMove = (e: PointerEvent) => {
+        if (document.visibilityState !== 'visible') return;
         lastPointerAtRef.current = Date.now();
         pendingX = e.clientX;
         pendingY = e.clientY;
-        if (rafId !== 0) return;
+        if (pointerComputeRafId !== 0) return;
 
-        rafId = window.requestAnimationFrame(() => {
-          rafId = 0;
+        pointerComputeRafId = window.requestAnimationFrame(() => {
+          pointerComputeRafId = 0;
           const el = svgRef.current;
           if (!el) return;
           const rect = el.getBoundingClientRect();
           const cx = rect.left + rect.width / 2;
           const cy = rect.top + rect.height / 2;
-          const next = clampGazeOffset((pendingX - cx) / 56, (pendingY - cy) / 56, 3.8);
-          const prev = gazeRef.current;
-          if (Math.abs(next.x - prev.x) > 0.14 || Math.abs(next.y - prev.y) > 0.14) {
-            gazeRef.current = next;
-            setGaze(next);
-          }
+          targetGazeRef.current = clampGazeOffset((pendingX - cx) / 72, (pendingY - cy) / 72, 4.2);
+          startGlideLoop();
         });
       };
 
@@ -203,7 +244,8 @@ export const XeroFace: React.FC<XeroFaceProps> = React.memo(
       return () => {
         window.removeEventListener('pointermove', handlePointerMove);
         window.clearInterval(idleGlanceTimer);
-        if (rafId !== 0) window.cancelAnimationFrame(rafId);
+        if (glideRafId !== 0) window.cancelAnimationFrame(glideRafId);
+        if (pointerComputeRafId !== 0) window.cancelAnimationFrame(pointerComputeRafId);
       };
     }, [emotion, interactiveGaze, reducedMotion]);
 
@@ -241,61 +283,92 @@ export const XeroFace: React.FC<XeroFaceProps> = React.memo(
       eyeSpec: typeof spec.leftEye,
       isLeft: boolean
     ) => {
-      // Cute > < flustered squint on rapid boops!
+      // Cute > < flustered squint on rapid boops (tracks mouse cleanly!)
       if (flusteredSquint && !reducedMotion) {
         const d = isLeft
           ? `M ${cx - 6} ${cy - 4.5} L ${cx + 5} ${cy} L ${cx - 6} ${cy + 4.5}`
           : `M ${cx + 6} ${cy - 4.5} L ${cx - 5} ${cy} L ${cx + 6} ${cy + 4.5}`;
         return (
-          <motion.path
-            key={`${isLeft ? 'L' : 'R'}-flustered`}
-            d={d}
-            fill="none"
-            stroke={faceColor}
-            strokeWidth={3.1}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            initial={{ scale: 0.7 }}
-            animate={{ scale: 1 }}
-            transition={EYE_SPRING}
-            style={{ transformOrigin: `${cx}px ${cy}px` }}
-          />
+          <motion.g
+            key={`${isLeft ? 'L' : 'R'}-flustered-gaze`}
+            initial={false}
+            animate={{ x: gaze.x * 0.95, y: gaze.y * 0.75 }}
+            transition={GAZE_EYE_SPRING}
+          >
+            <motion.path
+              key={`${isLeft ? 'L' : 'R'}-flustered`}
+              d={d}
+              fill="none"
+              stroke={faceColor}
+              strokeWidth={3.1}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              initial={{ scale: 0.7 }}
+              animate={{ scale: 1 }}
+              transition={EYE_SPRING}
+              style={{ transformOrigin: `${cx}px ${cy}px` }}
+            />
+          </motion.g>
         );
       }
 
-      // Cute 2D pastel heart eyes on loving pet streak!
+      // Cute 2D pastel heart eyes on loving pet streak (tracks mouse cleanly!)
       if (heartEyesFlash && !reducedMotion) {
         return (
-          <motion.path
-            key={`${isLeft ? 'L' : 'R'}-heart`}
-            d={`M ${cx} ${cy + 6.5} C ${cx - 8.5} ${cy + 1.5} ${cx - 8.5} ${cy - 6} ${cx - 3.5} ${cy - 6} C ${cx - 1.2} ${cy - 6} ${cx} ${cy - 4} ${cx} ${cy - 4} C ${cx} ${cy - 4} ${cx + 1.2} ${cy - 6} ${cx + 3.5} ${cy - 6} C ${cx + 8.5} ${cy - 6} ${cx + 8.5} ${cy + 1.5} ${cx} ${cy + 6.5} Z`}
-            fill="#FF5CA1"
-            initial={{ scale: 0.55 }}
-            animate={{ scale: [0.85, 1.12, 1] }}
-            transition={EYE_SPRING}
-            style={{ transformOrigin: `${cx}px ${cy}px` }}
-          />
+          <motion.g
+            key={`${isLeft ? 'L' : 'R'}-heart-gaze`}
+            initial={false}
+            animate={{ x: gaze.x * 0.95, y: gaze.y * 0.75 }}
+            transition={GAZE_EYE_SPRING}
+          >
+            <motion.path
+              key={`${isLeft ? 'L' : 'R'}-heart`}
+              d={`M ${cx} ${cy + 6.5} C ${cx - 8.5} ${cy + 1.5} ${cx - 8.5} ${cy - 6} ${cx - 3.5} ${cy - 6} C ${cx - 1.2} ${cy - 6} ${cx} ${cy - 4} ${cx} ${cy - 4} C ${cx} ${cy - 4} ${cx + 1.2} ${cy - 6} ${cx + 3.5} ${cy - 6} C ${cx + 8.5} ${cy - 6} ${cx + 8.5} ${cy + 1.5} ${cx} ${cy + 6.5} Z`}
+              fill="#FF5CA1"
+              initial={{ scale: 0.55 }}
+              animate={{ scale: 1 }}
+              transition={EYE_SPRING}
+              style={{ transformOrigin: `${cx}px ${cy}px` }}
+            />
+          </motion.g>
         );
       }
 
-      // Happy / Affectionate / Wink arc in pure 2D (override if actively peeking up curiously)
+      // Happy / Affectionate / Wink arc in pure 2D — tracks mouse smoothly too!
       if (eyeSpec.happyArc && !isBlinking && !peeking) {
         return (
-          <motion.path
-            key={`${isLeft ? 'L' : 'R'}-arc`}
-            d={`M ${cx - 7.2} ${cy + 2.5} Q ${cx} ${cy - 7.4} ${cx + 7.2} ${cy + 2.5}`}
-            fill="none"
-            stroke={faceColor}
-            strokeWidth={3.3}
-            strokeLinecap="round"
+          <motion.g
+            key={`${isLeft ? 'L' : 'R'}-arc-gaze`}
             initial={false}
             animate={{
-              opacity: 1,
-              scaleY: isSpeaking ? [1, 0.92, 1] : 1,
+              x: gaze.x * 0.95,
+              y: gaze.y * 0.75,
             }}
-            transition={EYE_SPRING}
-            style={{ transformOrigin: `${cx}px ${cy}px` }}
-          />
+            transition={GAZE_EYE_SPRING}
+          >
+            <motion.path
+              key={`${isLeft ? 'L' : 'R'}-arc`}
+              d={`M ${cx - 7.2} ${cy + 2.5} Q ${cx} ${cy - 7.4} ${cx + 7.2} ${cy + 2.5}`}
+              fill="none"
+              stroke={faceColor}
+              strokeWidth={3.3}
+              strokeLinecap="round"
+              initial={false}
+              animate={{
+                opacity: 1,
+                scaleY: isSpeaking && !reducedMotion ? [1, 0.92, 1] : 1,
+              }}
+              transition={
+                isSpeaking && !reducedMotion
+                  ? {
+                      scaleY: { repeat: Infinity, duration: 0.34, ease: 'easeInOut' },
+                      default: EYE_SPRING,
+                    }
+                  : EYE_SPRING
+              }
+              style={{ transformOrigin: `${cx}px ${cy}px` }}
+            />
+          </motion.g>
         );
       }
 
@@ -330,15 +403,24 @@ export const XeroFace: React.FC<XeroFaceProps> = React.memo(
           key={`${isLeft ? 'L' : 'R'}-pill`}
           initial={false}
           animate={{
-            x: isBlinking ? 0 : gaze.x * 0.95,
-            y: isBlinking ? 0.8 : peeking ? 1.5 : gaze.y * 0.75 + eyeSpec.lowerLid * 1.6,
+            x: gaze.x * 0.95,
+            y: isBlinking ? gaze.y * 0.75 + 0.8 : peeking ? 1.5 : gaze.y * 0.75 + eyeSpec.lowerLid * 1.6,
             rotate: tilt,
-            scaleY: isBlinking ? 0.16 : isListening ? [1, 1.07, 1] : 1,
+            scaleY: isBlinking ? 0.16 : isListening && !reducedMotion ? [1, 1.07, 1] : 1,
           }}
           transition={
-            isListening && !reducedMotion
-              ? { scaleY: { repeat: Infinity, duration: 1.35, ease: 'easeInOut' }, default: EYE_SPRING }
-              : EYE_SPRING
+            !isBlinking && isListening && !reducedMotion
+              ? {
+                  scaleY: { repeat: Infinity, duration: 1.35, ease: 'easeInOut' },
+                  x: GAZE_EYE_SPRING,
+                  y: GAZE_EYE_SPRING,
+                  default: EYE_SPRING,
+                }
+              : {
+                  x: GAZE_EYE_SPRING,
+                  y: GAZE_EYE_SPRING,
+                  default: EYE_SPRING,
+                }
           }
           style={{ transformOrigin: `${cx}px ${cy}px` }}
         >
@@ -385,7 +467,7 @@ export const XeroFace: React.FC<XeroFaceProps> = React.memo(
       0.78,
       spec.cheekOpacity * 0.6 + nuanceSpec.blushBoost + (showHearts || flusteredSquint ? 0.3 : 0.14)
     );
-    const targetHeadTilt = spec.headTiltDeg + nuanceSpec.headTiltOffset;
+    const targetHeadTilt = spec.headTiltDeg + nuanceSpec.headTiltOffset + (reducedMotion ? 0 : gaze.x * 0.42);
 
     return (
       <svg
@@ -406,10 +488,10 @@ export const XeroFace: React.FC<XeroFaceProps> = React.memo(
             reducedMotion
               ? { x: 0, y: spec.headOffsetY, rotate: targetHeadTilt }
               : {
-                  x: gaze.x * 0.42,
+                  x: gaze.x * 0.46,
                   y: musicPlaying
-                    ? [spec.headOffsetY - 1.6, spec.headOffsetY + 1.6, spec.headOffsetY - 1.6]
-                    : [spec.headOffsetY - 0.85, spec.headOffsetY + 0.85, spec.headOffsetY - 0.85],
+                    ? [spec.headOffsetY + gaze.y * 0.35 - 1.5, spec.headOffsetY + gaze.y * 0.35 + 1.5, spec.headOffsetY + gaze.y * 0.35 - 1.5]
+                    : [spec.headOffsetY + gaze.y * 0.35 - 0.85, spec.headOffsetY + gaze.y * 0.35 + 0.85, spec.headOffsetY + gaze.y * 0.35 - 0.85],
                   rotate: musicPlaying
                     ? [targetHeadTilt - 2.2, targetHeadTilt + 2.2, targetHeadTilt - 2.2]
                     : peeking
@@ -426,8 +508,10 @@ export const XeroFace: React.FC<XeroFaceProps> = React.memo(
                   y: { repeat: Infinity, duration: musicPlaying ? 0.72 : 3.2, ease: 'easeInOut' },
                   rotate: musicPlaying
                     ? { repeat: Infinity, duration: 1.44, ease: 'easeInOut' }
-                    : HEAD_SPRING,
-                  x: HEAD_SPRING,
+                    : !peeking && nuance === 'waking'
+                      ? { duration: 0.55, ease: 'easeInOut' }
+                      : GAZE_HEAD_SPRING,
+                  x: GAZE_HEAD_SPRING,
                 }
           }
           style={{ transformOrigin: '60px 34px' }}
@@ -464,24 +548,40 @@ export const XeroFace: React.FC<XeroFaceProps> = React.memo(
             {renderPure2DEye(79, 30, spec.rightEye, false)}
 
             {/* Flat 2D cute mouth */}
-            <path
-              d={mouthPath}
-              fill={isOpenHappy && !isCuteCatSmile ? '#6A1F42' : 'none'}
-              stroke={faceColor}
-              strokeWidth={isOpenHappy && !isCuteCatSmile ? 1.5 : 2.1}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              style={{ transition: 'all 120ms cubic-bezier(0.22, 1, 0.36, 1)' }}
-            />
-            {isOpenHappy && !isCuteCatSmile && (
-              <ellipse
-                cx={mouthCenterX}
-                cy={mouthCenterY + 2.8 + activeMouthOpen * 1.8}
-                rx={3.2}
-                ry={1.7}
-                fill="#FF6B9E"
+            <motion.g
+              initial={false}
+              animate={
+                reducedMotion
+                  ? { scaleY: 1, scaleX: 1 }
+                  : {
+                      scaleY: isSpeaking ? 0.92 + speechPulse * 0.2 : 1,
+                      scaleX: isSpeaking ? 1.04 - speechPulse * 0.06 : 1,
+                    }
+              }
+              transition={{ type: 'spring', stiffness: 420, damping: 24, mass: 0.45 }}
+              style={{ transformOrigin: `${mouthCenterX}px ${mouthCenterY}px` }}
+            >
+              <path
+                d={mouthPath}
+                fill={isOpenHappy && !isCuteCatSmile ? '#6A1F42' : 'none'}
+                stroke={faceColor}
+                strokeWidth={isOpenHappy && !isCuteCatSmile ? 1.5 : 2.1}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="transition-colors duration-150"
               />
-            )}
+              {isOpenHappy && !isCuteCatSmile && (
+                <motion.ellipse
+                  initial={false}
+                  animate={{ opacity: 1, scaleY: 1 }}
+                  cx={mouthCenterX}
+                  cy={mouthCenterY + 2.8 + activeMouthOpen * 1.8}
+                  rx={3.2}
+                  ry={1.7}
+                  fill="#FF6B9E"
+                />
+              )}
+            </motion.g>
 
             {/* Excited 2D sparkles */}
             <AnimatePresence>
@@ -549,6 +649,44 @@ export const XeroFace: React.FC<XeroFaceProps> = React.memo(
                     />
                   ))}
                 </motion.g>
+              )}
+            </AnimatePresence>
+
+            {/* Satisfied / Anticipating subtle 2D mini-glint */}
+            <AnimatePresence>
+              {(emotion === 'surprised' || nuance === 'satisfied' || nuance === 'anticipating') &&
+                emotion !== 'excited' &&
+                !reducedMotion && (
+                  <motion.g
+                    initial={{ opacity: 0, scale: 0.5 }}
+                    animate={{ opacity: [0.35, 0.9, 0.35], scale: [0.85, 1.08, 0.85] }}
+                    exit={{ opacity: 0, scale: 0.5 }}
+                    transition={{ repeat: Infinity, duration: 1.9, ease: 'easeInOut' }}
+                    style={{ transformOrigin: '103px 16px' }}
+                  >
+                    <path
+                      d="M 103 12 L 104 14.5 L 106.5 15.5 L 104 16.5 L 103 19 L 102 16.5 L 99.5 15.5 L 102 14.5 Z"
+                      fill={accentColor}
+                    />
+                  </motion.g>
+                )}
+            </AnimatePresence>
+
+            {/* Rhythmic 2D music note float while vibing */}
+            <AnimatePresence>
+              {musicPlaying && emotion !== 'sleepy' && !reducedMotion && (
+                <motion.path
+                  d="M 15 19 L 15 11.5 L 20.5 10.2 L 20.5 17 M 13.5 19 A 1.7 1.3 0 1 1 16.2 19 A 1.7 1.3 0 1 1 13.5 19 M 19 17.3 A 1.7 1.3 0 1 1 21.7 17.3 A 1.7 1.3 0 1 1 19 17.3"
+                  fill="none"
+                  stroke={accentColor}
+                  strokeWidth={1.35}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  initial={{ opacity: 0, y: 3 }}
+                  animate={{ opacity: [0.35, 0.9, 0.35], y: [1.5, -2.5, 1.5] }}
+                  exit={{ opacity: 0 }}
+                  transition={{ repeat: Infinity, duration: 1.5, ease: 'easeInOut' }}
+                />
               )}
             </AnimatePresence>
           </motion.g>

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { motion } from 'motion/react';
 import { Pause, Play, RotateCcw, Upload, X } from 'lucide-react';
 import { xeroStore, useXeroStore } from '../../core/store';
 
@@ -7,10 +8,19 @@ export const TeleprompterWindow: React.FC = () => {
   const accent = settings.appearance.accentColor;
 
   const [editing, setEditing] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(
+    typeof window !== 'undefined' ? window.innerWidth : 1440
+  );
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const resizeRef = useRef<{ startX: number; startY: number; origW: number; origH: number } | null>(null);
+
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize, { passive: true });
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   const lines = teleprompter.script.split(/\r?\n/).filter((l) => l.trim().length > 0);
   const progressPct =
@@ -102,13 +112,19 @@ export const TeleprompterWindow: React.FC = () => {
     reader.readAsText(file);
   };
 
+  const reducedMotion = settings.appearance.reducedMotion;
+
   return (
-    <section
+    <motion.section
       aria-label="XERO Independent Teleprompter"
       data-testid="xero-teleprompter"
+      initial={reducedMotion ? false : { opacity: 0, scale: 0.96, y: 8 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      exit={reducedMotion ? undefined : { opacity: 0, scale: 0.96, y: 6 }}
+      transition={{ type: 'spring', stiffness: 360, damping: 28, mass: 0.65 }}
       className="fixed z-35 rounded-2xl bg-[#0B0E12]/96 backdrop-blur-2xl border border-white/12 shadow-[0_20px_64px_rgba(0,0,0,0.82)] flex flex-col overflow-hidden"
       style={{
-        left: `${Math.min(teleprompter.x, Math.max(12, (typeof window !== 'undefined' ? window.innerWidth : 1280) - teleprompter.width - 12))}px`,
+        left: `${Math.min(teleprompter.x, Math.max(12, viewportWidth - teleprompter.width - 24))}px`,
         top: `${teleprompter.y}px`,
         width: `${teleprompter.width}px`,
         height: `${teleprompter.height}px`,
@@ -210,7 +226,8 @@ export const TeleprompterWindow: React.FC = () => {
               onChange={(e) =>
                 xeroStore.updateTeleprompter((p) => ({ ...p, fontSize: Number(e.target.value) }))
               }
-              className="w-14 accent-[#00E5FF]"
+              style={{ accentColor: accent }}
+              className="w-14 cursor-pointer"
             />
           </label>
           <label className="flex items-center gap-1">
@@ -224,7 +241,8 @@ export const TeleprompterWindow: React.FC = () => {
               onChange={(e) =>
                 xeroStore.updateTeleprompter((p) => ({ ...p, scrollSpeed: Number(e.target.value) }))
               }
-              className="w-14 accent-[#00E5FF]"
+              style={{ accentColor: accent }}
+              className="w-14 cursor-pointer"
             />
           </label>
         </div>
@@ -282,6 +300,6 @@ export const TeleprompterWindow: React.FC = () => {
           borderBottomRightRadius: 4,
         }}
       />
-    </section>
+    </motion.section>
   );
 };

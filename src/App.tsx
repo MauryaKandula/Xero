@@ -1,6 +1,8 @@
 import { lazy, Suspense, useEffect, useRef } from 'react';
+import { AnimatePresence } from 'motion/react';
 import { xeroStore, useXeroStore } from './core/store';
 import { fetchServerHealth } from './core/aiClient';
+import { liveSessionController } from './core/liveSessionController';
 import { DynamicIsland } from './components/xero/DynamicIsland';
 import { DesktopBackdrop } from './components/xero/DesktopBackdrop';
 
@@ -26,7 +28,7 @@ export default function App() {
 
   useEffect(() => {
     void fetchServerHealth().then((status) => {
-      xeroStore.setServerCapabilities(status.geminiConfigured);
+      xeroStore.setServerCapabilities(status.geminiConfigured, status.liveSupported);
     });
   }, []);
 
@@ -48,6 +50,15 @@ export default function App() {
         e.preventDefault();
         const current = xeroStore.getSnapshot();
         xeroStore.setIslandExpanded(!current.islandExpanded, 'chat');
+      } else if (e.altKey && e.key.toLowerCase() === 'h') {
+        e.preventDefault();
+        const current = xeroStore.getSnapshot();
+        if (current.islandMode === 'minimized') {
+          xeroStore.setIslandExpanded(false);
+        } else {
+          liveSessionController.stop('Hidden');
+          xeroStore.setIslandMode('minimized');
+        }
       } else if (e.key === 'F9') {
         e.preventDefault();
         const current = xeroStore.getSnapshot();
@@ -58,6 +69,9 @@ export default function App() {
         }
       } else if (e.key === 'Escape') {
         const current = xeroStore.getSnapshot();
+        if (liveSessionController.getPhase() !== 'idle') {
+          liveSessionController.stop('Escape pressed');
+        }
         if (current.isListening) xeroStore.setListening(false);
         if (current.menuOpen) xeroStore.setMenuOpen(false);
         if (current.islandExpanded) xeroStore.setIslandExpanded(false);
@@ -117,17 +131,21 @@ export default function App() {
       {/* Primary independent floating companion */}
       <DynamicIsland />
       {/* Independent Teleprompter window — mounted only when opened */}
-      {teleprompter.isOpen && (
-        <Suspense fallback={null}>
-          <TeleprompterWindow />
-        </Suspense>
-      )}
+      <AnimatePresence>
+        {teleprompter.isOpen && (
+          <Suspense fallback={null} key="teleprompter-suspense">
+            <TeleprompterWindow />
+          </Suspense>
+        )}
+      </AnimatePresence>
       {/* Independent XERO Studio window — lazy-loaded & mounted ONLY when open */}
-      {studio.isOpen && !studio.minimized && (
-        <Suspense fallback={null}>
-          <XeroStudioWindow />
-        </Suspense>
-      )}
+      <AnimatePresence>
+        {studio.isOpen && !studio.minimized && (
+          <Suspense fallback={null} key="studio-suspense">
+            <XeroStudioWindow />
+          </Suspense>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

@@ -2,14 +2,22 @@ import type {
   ChatMessage,
   EmotionState,
   MemoryFact,
+  ResponseDepth,
   XeroSettings,
 } from './types';
 import { inferEmotionFromText } from './emotions';
-import { runOfflineEngine, type OfflineAction } from './offlineEngine';
+import {
+  describeOfflineAction,
+  runOfflineEngine,
+  type OfflineAction,
+} from './offlineEngine';
+import type { WorkspaceTelemetryContext } from './jarvisEngine';
+import { buildRuntimeSystemPrompt } from './assistantPrompt';
 
 export interface AIHealthStatus {
   ok: boolean;
   geminiConfigured: boolean;
+  liveSupported: boolean;
   checkedAt: number;
 }
 
@@ -18,26 +26,33 @@ export interface AIResponseResult {
   provider: 'offline' | 'local-llm' | 'gemini';
   emotion: EmotionState;
   action?: OfflineAction;
+  actions?: OfflineAction[];
+  actionLabels?: string[];
   fallbackNote?: string;
 }
 
 export async function fetchServerHealth(): Promise<AIHealthStatus> {
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
-    return { ok: false, geminiConfigured: false, checkedAt: Date.now() };
+    return { ok: false, geminiConfigured: false, liveSupported: false, checkedAt: Date.now() };
   }
   try {
     const res = await fetch('/api/health', { cache: 'no-store' });
     if (!res.ok) {
-      return { ok: false, geminiConfigured: false, checkedAt: Date.now() };
+      return { ok: false, geminiConfigured: false, liveSupported: false, checkedAt: Date.now() };
     }
-    const data = (await res.json()) as { ok?: boolean; geminiConfigured?: boolean };
+    const data = (await res.json()) as {
+      ok?: boolean;
+      geminiConfigured?: boolean;
+      liveSupported?: boolean;
+    };
     return {
       ok: Boolean(data.ok),
       geminiConfigured: Boolean(data.geminiConfigured),
+      liveSupported: Boolean(data.liveSupported),
       checkedAt: Date.now(),
     };
   } catch {
-    return { ok: false, geminiConfigured: false, checkedAt: Date.now() };
+    return { ok: false, geminiConfigured: false, liveSupported: false, checkedAt: Date.now() };
   }
 }
 
@@ -178,8 +193,9 @@ async function callGeminiStream(
   history: ChatMessage[],
   settings: XeroSettings,
   systemInstruction: string,
+  telemetry: WorkspaceTelemetryContext,
   onStreamChunk?: (partialText: string) => void
-): Promise<string> {
+): Promise<{ text: string; toolActions: OfflineAction[] }> {
   const res = await fetch('/api/ai/gemini', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -187,6 +203,7 @@ async function callGeminiStream(
       prompt,
       model: settings.ai.geminiModel,
       systemInstruction,
+      telemetry,
       history: history.map((m) => ({ role: m.role, text: m.text })),
     }),
   });
@@ -204,6 +221,7 @@ async function callGeminiStream(
   const decoder = new TextDecoder();
   let accumulated = '';
   let buffer = '';
+  const toolActions: OfflineAction[] = [];
 
   while (true) {
     const { value, done } = await reader.read();
@@ -221,11 +239,15 @@ async function callGeminiStream(
       if (!jsonStr) continue;
       const parsed = JSON.parse(jsonStr) as {
         chunk?: string;
+        toolActions?: OfflineAction[];
         error?: string;
         done?: boolean;
       };
       if (parsed.error) {
         throw new Error(parsed.error);
+      }
+      if (Array.isArray(parsed.toolActions)) {
+        toolActions.push(...parsed.toolActions);
       }
       if (parsed.chunk) {
         accumulated += parsed.chunk;
@@ -234,10 +256,13 @@ async function callGeminiStream(
     }
   }
 
-  if (!accumulated.trim()) {
+  if (!accumulated.trim() && toolActions.length === 0) {
     throw new Error('Gemini returned an empty response.');
   }
-  return accumulated.trim();
+  return {
+    text: accumulated.trim() || 'Executed requested workspace actions.',
+    toolActions,
+  };
 }
 
 export async function generateXeroReply(params: {
@@ -245,13 +270,9 @@ export async function generateXeroReply(params: {
   history: ChatMessage[];
   settings: XeroSettings;
   memories: MemoryFact[];
-  contextSummary: {
-    timersCount: number;
-    clipboardCount: number;
-    filesCount: number;
-    isOnline: boolean;
-  };
+  contextSummary: WorkspaceTelemetryContext;
   geminiAvailable: boolean;
+  responseDepth?: ResponseDepth;
   onStreamChunk?: (partialText: string) => void;
 }): Promise<AIResponseResult> {
   const {
@@ -261,32 +282,52 @@ export async function generateXeroReply(params: {
     memories,
     contextSummary,
     geminiAvailable,
+    responseDepth = 'balanced',
     onStreamChunk,
   } = params;
 
-  // Always check local deterministic commands first (timers, music, Studio, memory, math, emotion test)
+  // Always check local deterministic commands, compound chains, and Jarvis protocols first
   const offlinePreview = runOfflineEngine(prompt, settings, memories, contextSummary);
   if (offlinePreview.action.type !== 'none') {
+    const singleLabel = describeOfflineAction(offlinePreview.action);
+    const labels =
+      offlinePreview.actionLabels && offlinePreview.actionLabels.length > 0
+        ? offlinePreview.actionLabels
+        : singleLabel
+          ? [singleLabel]
+          : undefined;
     return {
       text: offlinePreview.text,
       provider: 'offline',
       emotion: offlinePreview.emotion,
       action: offlinePreview.action,
+      actions: offlinePreview.actions ?? [offlinePreview.action],
+      actionLabels: labels,
     };
   }
 
-  const memoryContext =
-    settings.ai.memoryEnabled && memories.length > 0
-      ? `\nRemembered user facts:\n${memories.map((m) => `- ${m.fact}`).join('\n')}`
-      : '';
-
-  const systemInstruction = `You are ${settings.personalization.assistantName}, a floating Dynamic Island desktop AI companion.
-Personality tone: ${settings.personalization.personalityTone}.
-User name: ${settings.personalization.userName || 'User'}.
-Keep replies concise, helpful, and natural for a compact floating desktop assistant.${memoryContext}
-${settings.ai.systemPrompt ? `\nCustom instructions: ${settings.ai.systemPrompt}` : ''}`;
+  const systemInstruction = buildRuntimeSystemPrompt({
+    settings,
+    memories,
+    responseDepth,
+    forLiveAudio: false,
+  });
 
   const mode = settings.ai.providerMode;
+
+  const formatGeminiResult = (res: { text: string; toolActions: OfflineAction[] }): AIResponseResult => {
+    const labels = res.toolActions
+      .map((a) => describeOfflineAction(a))
+      .filter((l): l is string => Boolean(l));
+    return {
+      text: res.text,
+      provider: 'gemini',
+      emotion: inferEmotionFromText(res.text, 'assistant'),
+      action: res.toolActions[0],
+      actions: res.toolActions,
+      actionLabels: labels.length > 0 ? labels : undefined,
+    };
+  };
 
   // 1. Explicit Offline Mode
   if (mode === 'offline') {
@@ -328,12 +369,8 @@ ${settings.ai.systemPrompt ? `\nCustom instructions: ${settings.ai.systemPrompt}
       };
     }
     try {
-      const text = await callGeminiStream(prompt, history, settings, systemInstruction, onStreamChunk);
-      return {
-        text,
-        provider: 'gemini',
-        emotion: inferEmotionFromText(text, 'assistant'),
-      };
+      const res = await callGeminiStream(prompt, history, settings, systemInstruction, contextSummary, onStreamChunk);
+      return formatGeminiResult(res);
     } catch (err: unknown) {
       const reason = err instanceof Error ? err.message : 'Gemini unavailable';
       return {
@@ -346,15 +383,10 @@ ${settings.ai.systemPrompt ? `\nCustom instructions: ${settings.ai.systemPrompt}
   }
 
   // 4. Auto Smart Routing:
-  // If online & Gemini is configured -> try Gemini; else try Local LLM if configured -> else Offline Core
   if (contextSummary.isOnline && geminiAvailable) {
     try {
-      const text = await callGeminiStream(prompt, history, settings, systemInstruction, onStreamChunk);
-      return {
-        text,
-        provider: 'gemini',
-        emotion: inferEmotionFromText(text, 'assistant'),
-      };
+      const res = await callGeminiStream(prompt, history, settings, systemInstruction, contextSummary, onStreamChunk);
+      return formatGeminiResult(res);
     } catch {
       // Try Local LLM next, then offline
     }

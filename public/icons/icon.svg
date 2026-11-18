@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="xeroSignalGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00E5FF" />
+      <stop offset="100%" stop-color="#9C6BFF" />
+    </linearGradient>
+    <radialGradient id="xeroCoreGlow" cx="50%" cy="46%" r="54%">
+      <stop offset="0%" stop-color="#12161B" />
+      <stop offset="100%" stop-color="#050608" />
+    </radialGradient>
+  </defs>
+
+  <!-- Primary Squircle Chassis -->
+  <rect x="24" y="24" width="464" height="464" rx="116" fill="url(#xeroCoreGlow)" stroke="url(#xeroSignalGrad)" stroke-width="14" stroke-opacity="0.72" />
+
+  <!-- Ambient Voice Signal Rings -->
+  <path d="M 118 256 A 138 138 0 0 1 256 118" fill="none" stroke="#00E5FF" stroke-width="18" stroke-linecap="round" stroke-opacity="0.92" />
+  <path d="M 394 256 A 138 138 0 0 1 256 394" fill="none" stroke="#9C6BFF" stroke-width="18" stroke-linecap="round" stroke-opacity="0.92" />
+
+  <!-- Dynamic Island Capsule Silhouette -->
+  <rect x="132" y="188" width="248" height="136" rx="68" fill="#0B0E12" stroke="#EDF5FF" stroke-width="8" stroke-opacity="0.22" />
+
+  <!-- Expressive Twin Pill Eyes (XERO signature motif) -->
+  <rect x="184" y="226" width="38" height="60" rx="19" fill="#EDF5FF" />
+  <rect x="290" y="226" width="38" height="60" rx="19" fill="#EDF5FF" />
+
+  <!-- Minimal Voice Pulse Dot -->
+  <circle cx="256" cy="256" r="10" fill="url(#xeroSignalGrad)" />
+</svg>

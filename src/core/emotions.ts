@@ -373,6 +373,24 @@ export function clampGazeOffset(dx: number, dy: number, maxRadius = 4.5): { x: n
   return { x: dx * scale, y: dy * scale };
 }
 
+export function smoothGazeStep(
+  current: { x: number; y: number },
+  target: { x: number; y: number },
+  alpha = 0.15
+): { x: number; y: number; settled: boolean } {
+  const dx = target.x - current.x;
+  const dy = target.y - current.y;
+  if (Math.hypot(dx, dy) < 0.04) {
+    return { x: target.x, y: target.y, settled: true };
+  }
+  const factor = Math.min(1, Math.max(0.02, alpha));
+  return {
+    x: current.x + dx * factor,
+    y: current.y + dy * factor,
+    settled: false,
+  };
+}
+
 export function nextBlinkIntervalMs(emotion: EmotionState, rand01: number): number {
   const clamped = Math.min(1, Math.max(0, rand01));
   if (emotion === 'sleepy' || emotion === 'bored') {

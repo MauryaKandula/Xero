@@ -1,7 +1,9 @@
 node_modules/
 build/
 dist/
+server.js
 coverage/
+release/*.zip
 .DS_Store
 *.log
 .env*

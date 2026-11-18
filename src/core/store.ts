@@ -11,11 +11,16 @@ import type {
   IslandPosition,
   IslandWidgetTab,
   LiveHudState,
+  LiveLatencyMetrics,
+  LiveSessionPhase,
+  LlmInferenceMetric,
   MemoryFact,
   MenuCategory,
   NotificationBanner,
+  PendingConfirmation,
   QuickNoteItem,
   ReminderItem,
+  ResponseDepth,
   ShelfFileItem,
   StudioTab,
   StudioWindowState,
@@ -42,6 +47,12 @@ import {
   transformShelfImageCopy,
 } from './shelfTools';
 import { renderWorkspaceSnapshot } from './screenshotCapture';
+import {
+  buildCaptureNoteFromMessages,
+  formatNotesAsMarkdown,
+  summarizeSessionCatchUp,
+} from './assistantPrompt';
+import { ToolWriteDeduplicator } from './toolValidation';
 import type { OfflineAction } from './offlineEngine';
 
 const SETTINGS_STORAGE_KEY = 'xero.settings.v1';
@@ -49,9 +60,10 @@ const MEMORY_STORAGE_KEY = 'xero.memory.v1';
 const CLIPBOARD_STORAGE_KEY = 'xero.clipboard.v1';
 const FILES_STORAGE_KEY = 'xero.files.v1';
 const STUDIO_STORAGE_KEY = 'xero.studio.v1';
-const POSITION_STORAGE_KEY = 'xero.position.v1';
+const POSITION_STORAGE_KEY = 'xero.position.v2';
 const PRODUCTIVITY_STORAGE_KEY = 'xero.productivity.v1';
 const SHORTCUTS_STORAGE_KEY = 'xero.shortcuts.v1';
+const HISTORY_STORAGE_KEY = 'xero.history.v1';
 const BROADCAST_CHANNEL = 'xero-sync-v1';
 
 export const DEFAULT_SETTINGS: XeroSettings = {
@@ -60,6 +72,7 @@ export const DEFAULT_SETTINGS: XeroSettings = {
     gamingMode: false,
     alwaysOnTopSim: true,
     autoCollapseMs: 0,
+    autoHideDelayMs: 0,
     hotkeyLabel: 'R-Ctrl (Cmd) · R-Alt (Dictate) · F9 (AI)',
     soundEffects: true,
     spontaneousBehavior: true,
@@ -80,6 +93,8 @@ export const DEFAULT_SETTINGS: XeroSettings = {
   ai: {
     providerMode: 'auto',
     geminiModel: 'gemini-4-hydrogen',
+    liveModel: 'gemini-3.8-live',
+    liveVoiceName: 'Kore',
     localFormat: 'ollama',
     localEndpoint: 'http://127.0.0.1:11434',
     localModel: 'llama3.2',
@@ -103,6 +118,8 @@ export const DEFAULT_SETTINGS: XeroSettings = {
   },
   privacy: {
     captureClipboardHistory: true,
+    persistChatHistory: false,
+    retainAudioRecordings: false,
   },
   personalization: {
     assistantName: 'XERO',
@@ -127,9 +144,9 @@ const DEFAULT_TELEPROMPTER: TeleprompterState = {
   playing: false,
   speechFollow: false,
   activeLine: 0,
-  x: typeof window !== 'undefined' ? Math.max(24, window.innerWidth - 420) : 820,
-  y: 120,
-  width: 380,
+  x: 1040,
+  y: 80,
+  width: 376,
   height: 280,
 };
 
@@ -150,6 +167,22 @@ export interface XeroAppState {
   streamingText: string;
   isOnline: boolean;
   geminiConfigured: boolean;
+  liveSupported: boolean;
+  responseDepth: ResponseDepth;
+  pendingConfirmation: PendingConfirmation | null;
+  liveSession: {
+    phase: LiveSessionPhase;
+    muted: boolean;
+    statusText: string | null;
+    userTranscriptDraft: string;
+    assistantTranscriptDraft: string;
+    metrics: LiveLatencyMetrics;
+  };
+  lastCapturedMarkdown: {
+    title: string;
+    markdown: string;
+    timestamp: number;
+  } | null;
   lastError: string | null;
   petCount: number;
   pokeTick: number;
@@ -186,6 +219,7 @@ export interface XeroAppState {
   screenAssistActive: boolean;
   systemStatus: SystemStatusSnapshot;
   studio: StudioWindowState;
+  llmMetrics: LlmInferenceMetric[];
 }
 
 function safeReadJson<T>(key: string, fallback: T): T {
@@ -208,6 +242,15 @@ function safeWriteJson(key: string, value: unknown): void {
   }
 }
 
+function safeRemoveKey(key: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 function mergeSettings(saved: Partial<XeroSettings> | null): XeroSettings {
   if (!saved) return DEFAULT_SETTINGS;
   return {
@@ -221,7 +264,11 @@ function mergeSettings(saved: Partial<XeroSettings> | null): XeroSettings {
         ? saved.voice.customVocabulary
         : DEFAULT_SETTINGS.voice.customVocabulary,
     },
-    privacy: { ...DEFAULT_SETTINGS.privacy, ...(saved.privacy ?? {}) },
+    privacy: {
+      ...DEFAULT_SETTINGS.privacy,
+      ...(saved.privacy ?? {}),
+      retainAudioRecordings: false,
+    },
     personalization: { ...DEFAULT_SETTINGS.personalization, ...(saved.personalization ?? {}) },
   };
 }
@@ -278,6 +325,8 @@ class XeroSingletonStore {
   private lastPokeAt = 0;
   private lastActivityAt = Date.now();
   private sleptFromInactivity = false;
+  private hiddenFromInactivity = false;
+  private writeDeduplicator = new ToolWriteDeduplicator();
 
   constructor() {
     const savedSettings = mergeSettings(safeReadJson<Partial<XeroSettings> | null>(SETTINGS_STORAGE_KEY, null));
@@ -285,9 +334,21 @@ class XeroSingletonStore {
     const savedClipboard = safeReadJson<ClipboardItem[]>(CLIPBOARD_STORAGE_KEY, INITIAL_CLIPBOARD);
     const savedFiles = safeReadJson<ShelfFileItem[]>(FILES_STORAGE_KEY, []);
     const savedStudio = safeReadJson<Partial<StudioWindowState> | null>(STUDIO_STORAGE_KEY, null);
-    const savedPosition = safeReadJson<IslandPosition>(POSITION_STORAGE_KEY, { docked: true, x: 0, y: 0 });
+    const rawPosition = safeReadJson<IslandPosition>(POSITION_STORAGE_KEY, { docked: true, x: 0, y: 0 });
+    const validPosition =
+      !rawPosition ||
+      typeof rawPosition.docked !== 'boolean' ||
+      (!rawPosition.docked &&
+        typeof window !== 'undefined' &&
+        (rawPosition.x < 60 || rawPosition.y < 0 || rawPosition.x > window.innerWidth - 60 || rawPosition.y > window.innerHeight - 60))
+        ? { docked: true, x: 0, y: 0 }
+        : rawPosition;
+    const savedPosition = validPosition;
     const savedProductivity = safeReadJson<SavedProductivity>(PRODUCTIVITY_STORAGE_KEY, {});
     const savedShortcuts = safeReadJson<AppShortcutItem[]>(SHORTCUTS_STORAGE_KEY, DEFAULT_SHORTCUTS);
+    const savedHistory = savedSettings.privacy.persistChatHistory
+      ? safeReadJson<ChatMessage[]>(HISTORY_STORAGE_KEY, [])
+      : [];
 
     const startupGreet = getTimeOfDayGreeting(new Date().getHours(), savedSettings.personalization.userName);
 
@@ -308,21 +369,41 @@ class XeroSingletonStore {
       streamingText: '',
       isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
       geminiConfigured: false,
+      liveSupported: false,
+      responseDepth: 'balanced',
+      pendingConfirmation: null,
+      liveSession: {
+        phase: 'idle',
+        muted: false,
+        statusText: null,
+        userTranscriptDraft: '',
+        assistantTranscriptDraft: '',
+        metrics: {
+          micActivationMs: null,
+          firstResponseMs: null,
+          interruptToSilenceMs: null,
+          reconnectCount: 0,
+        },
+      },
+      lastCapturedMarkdown: null,
       lastError: null,
       petCount: 0,
       pokeTick: 0,
       rapidPokeStreak: 0,
       reactionWhisper: null,
-      messages: [
-        {
-          id: 'msg-welcome',
-          role: 'assistant',
-          text: startupGreet.greeting,
-          timestamp: Date.now(),
-          provider: 'offline',
-          emotion: startupGreet.emotion,
-        },
-      ],
+      messages:
+        savedHistory.length > 0
+          ? savedHistory
+          : [
+              {
+                id: 'msg-welcome',
+                role: 'assistant',
+                text: startupGreet.greeting,
+                timestamp: Date.now(),
+                provider: 'offline',
+                emotion: startupGreet.emotion,
+              },
+            ],
       timers: [],
       reminders: [],
       todos: savedProductivity.todos ?? [],
@@ -361,6 +442,7 @@ class XeroSingletonStore {
         ...(savedStudio ?? {}),
         isOpen: false,
       },
+      llmMetrics: [],
     };
 
     if (typeof window !== 'undefined') {
@@ -449,6 +531,17 @@ class XeroSingletonStore {
 
   recordUserActivity(): void {
     this.lastActivityAt = Date.now();
+    if (this.hiddenFromInactivity && this.state.islandMode === 'minimized') {
+      this.hiddenFromInactivity = false;
+      this.state = {
+        ...this.state,
+        islandMode: 'idle',
+        emotion: 'happy',
+        emotionNuance: 'waking',
+      };
+      this.emit();
+      return;
+    }
     if (this.sleptFromInactivity && this.state.settings.general.spontaneousBehavior) {
       this.sleptFromInactivity = false;
       const wakeLine = SITUATION_VOICE_LINES.wake[0];
@@ -468,8 +561,29 @@ class XeroSingletonStore {
     }
   }
 
+  wakeFromVoice(whisper = 'Listening~'): void {
+    this.lastActivityAt = Date.now();
+    this.hiddenFromInactivity = false;
+    this.sleptFromInactivity = false;
+    this.state = {
+      ...this.state,
+      islandMode: this.state.islandExpanded ? this.state.islandMode : 'idle',
+      emotion: 'curious',
+      emotionNuance: 'waking',
+    };
+    this.showWhisper(whisper);
+    this.emit();
+    if (typeof window !== 'undefined') {
+      window.setTimeout(() => {
+        if (this.state.emotionNuance === 'waking') {
+          this.state = { ...this.state, emotionNuance: 'none' };
+          this.emit();
+        }
+      }, 1500);
+    }
+  }
+
   private handleLivingPetTick(): void {
-    if (!this.state.settings.general.spontaneousBehavior) return;
     if (
       this.state.isListening ||
       this.state.isThinking ||
@@ -482,6 +596,15 @@ class XeroSingletonStore {
     }
 
     const idleMs = Date.now() - this.lastActivityAt;
+    const autoHideDelayMs = this.state.settings.general.autoHideDelayMs ?? 0;
+    if (autoHideDelayMs > 0 && idleMs >= autoHideDelayMs && this.state.islandMode !== 'minimized') {
+      this.hiddenFromInactivity = true;
+      this.setIslandMode('minimized');
+      return;
+    }
+
+    if (!this.state.settings.general.spontaneousBehavior) return;
+
     if (idleMs > 60_000) {
       if (this.state.emotion !== 'sleepy') {
         this.sleptFromInactivity = true;
@@ -630,9 +753,56 @@ class XeroSingletonStore {
     }
   }
 
-  setServerCapabilities(geminiConfigured: boolean): void {
-    this.state = { ...this.state, geminiConfigured };
+  setServerCapabilities(geminiConfigured: boolean, liveSupported = geminiConfigured): void {
+    this.state = { ...this.state, geminiConfigured, liveSupported };
     this.emit();
+  }
+
+  setResponseDepth(depth: ResponseDepth): void {
+    this.state = { ...this.state, responseDepth: depth };
+    this.showWhisper(`Depth: ${depth}`);
+    this.emit();
+  }
+
+  setLiveSessionState(patch: Partial<XeroAppState['liveSession']>): void {
+    this.state = {
+      ...this.state,
+      liveSession: { ...this.state.liveSession, ...patch },
+    };
+    this.emit();
+  }
+
+  requestConfirmation(pending: Omit<PendingConfirmation, 'id' | 'createdAt'>): void {
+    this.state = {
+      ...this.state,
+      pendingConfirmation: {
+        ...pending,
+        id: `confirm-${Date.now()}`,
+        createdAt: Date.now(),
+      },
+    };
+    this.emit();
+  }
+
+  resolvePendingConfirmation(approve: boolean): string {
+    const pending = this.state.pendingConfirmation;
+    if (!pending) return 'No pending confirmation.';
+    this.state = { ...this.state, pendingConfirmation: null };
+    if (!approve) {
+      this.emit();
+      return 'Cancelled — no changes made.';
+    }
+    this.executeOfflineAction({
+      type: pending.actionType as OfflineAction['type'],
+      payload: pending.payload,
+    });
+    if (pending.payload?.alsoDepth) {
+      this.setResponseDepth(pending.payload.alsoDepth as ResponseDepth);
+    }
+    this.emit();
+    return pending.kind === 'preference'
+      ? `Saved preference locally: "${String(pending.payload?.fact || pending.summary)}".`
+      : 'Confirmed and executed.';
   }
 
   setEmotion(emotion: EmotionState, broadcast = false, nuance: EmotionNuance = 'none'): void {
@@ -709,12 +879,31 @@ class XeroSingletonStore {
 
   setIslandExpanded(expanded: boolean, tab?: IslandWidgetTab): void {
     this.recordUserActivity();
+    const wasMinimized = this.state.islandMode === 'minimized';
+    const clearStaleListening =
+      expanded &&
+      tab &&
+      tab !== 'chat' &&
+      !this.state.isListening &&
+      this.state.emotion === 'listening';
+    const nextEmotion = clearStaleListening
+      ? 'neutral'
+      : wasMinimized || this.state.emotion === 'sleepy'
+        ? 'happy'
+        : this.state.emotion;
+    const nextNuance = clearStaleListening
+      ? 'none'
+      : wasMinimized
+        ? 'waking'
+        : this.state.emotionNuance;
     this.state = {
       ...this.state,
       islandExpanded: expanded,
       menuOpen: expanded ? false : this.state.menuOpen,
       islandMode: expanded ? (tab && tab !== 'chat' ? 'widgets' : 'chat') : 'idle',
       activeWidgetTab: tab ?? this.state.activeWidgetTab,
+      emotion: nextEmotion,
+      emotionNuance: nextNuance,
     };
     this.emit();
   }
@@ -781,12 +970,16 @@ class XeroSingletonStore {
   setIslandMode(mode: IslandMode): void {
     if (mode === 'minimized') {
       audioService.playPopChime(this.state.settings.general.soundEffects);
-      this.showWhisper('Tucked up top~');
+      if (this.whisperTimeout !== null && typeof window !== 'undefined') {
+        window.clearTimeout(this.whisperTimeout);
+        this.whisperTimeout = null;
+      }
     }
     this.state = {
       ...this.state,
       islandMode: mode,
       menuOpen: mode === 'menu',
+      reactionWhisper: mode === 'minimized' ? null : this.state.reactionWhisper,
       emotion: mode === 'minimized' ? 'sleepy' : this.state.emotion === 'sleepy' ? 'neutral' : this.state.emotion,
       islandExpanded: mode !== 'idle' && mode !== 'minimized' && mode !== 'hovered' && mode !== 'menu',
     };
@@ -794,12 +987,15 @@ class XeroSingletonStore {
   }
 
   setActiveWidgetTab(tab: IslandWidgetTab): void {
+    const clearStaleListening = !this.state.isListening && this.state.emotion === 'listening';
     this.state = {
       ...this.state,
       activeWidgetTab: tab,
       islandExpanded: true,
       menuOpen: false,
       islandMode: tab === 'chat' ? 'chat' : 'widgets',
+      emotion: clearStaleListening ? 'neutral' : this.state.emotion,
+      emotionNuance: clearStaleListening ? 'none' : this.state.emotionNuance,
     };
     this.emit();
   }
@@ -852,34 +1048,113 @@ class XeroSingletonStore {
       id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       timestamp: Date.now(),
     };
+    const nextMessages = [...this.state.messages.slice(-49), entry];
     this.state = {
       ...this.state,
-      messages: [...this.state.messages.slice(-49), entry],
+      messages: nextMessages,
       streamingText: '',
+    };
+    if (this.state.settings.privacy.persistChatHistory) {
+      safeWriteJson(HISTORY_STORAGE_KEY, nextMessages);
+    }
+    this.emit();
+  }
+
+  recordLlmMetric(metric: Omit<LlmInferenceMetric, 'id'>): void {
+    const entry: LlmInferenceMetric = {
+      ...metric,
+      id: `llm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    };
+    this.state = {
+      ...this.state,
+      llmMetrics: [entry, ...this.state.llmMetrics.slice(0, 19)],
     };
     this.emit();
   }
 
   clearMessages(): void {
+    const resetMessages: ChatMessage[] = [
+      {
+        id: `msg-${Date.now()}`,
+        role: 'assistant',
+        text: 'Conversation cleared. Ready whenever you are.',
+        timestamp: Date.now(),
+        provider: 'offline',
+        emotion: 'neutral',
+      },
+    ];
     this.state = {
       ...this.state,
-      messages: [
-        {
-          id: `msg-${Date.now()}`,
-          role: 'assistant',
-          text: 'Conversation cleared. Ready whenever you are.',
-          timestamp: Date.now(),
-          provider: 'offline',
-          emotion: 'neutral',
-        },
-      ],
+      messages: resetMessages,
+      pendingConfirmation: null,
     };
+    if (this.state.settings.privacy.persistChatHistory) {
+      safeWriteJson(HISTORY_STORAGE_KEY, resetMessages);
+    } else {
+      safeRemoveKey(HISTORY_STORAGE_KEY);
+    }
     this.emit();
   }
 
   updateSettings(updater: (prev: XeroSettings) => XeroSettings): void {
-    const next = updater(this.state.settings);
-    this.state = { ...this.state, settings: next };
+    const prev = this.state.settings;
+    const rawNext = updater(prev);
+    const next: XeroSettings = {
+      ...rawNext,
+      privacy: {
+        ...rawNext.privacy,
+        retainAudioRecordings: false,
+      },
+    };
+    let nextEmotion = this.state.emotion;
+    let nextNuance = this.state.emotionNuance;
+    let whisper: string | null = null;
+
+    if (prev.general.gamingMode !== next.general.gamingMode) {
+      nextEmotion = next.general.gamingMode ? 'focused' : 'happy';
+      nextNuance = next.general.gamingMode ? 'concentrating' : 'relaxed';
+      whisper = next.general.gamingMode ? 'Gaming Mode ON' : 'Gaming Mode OFF';
+    } else if (prev.general.spontaneousBehavior !== next.general.spontaneousBehavior) {
+      nextEmotion = next.general.spontaneousBehavior ? 'playful' : 'focused';
+      nextNuance = next.general.spontaneousBehavior ? 'anticipating' : 'none';
+      whisper = next.general.spontaneousBehavior ? 'Living pet active~' : 'Calm steady mode';
+    } else if (prev.general.soundEffects !== next.general.soundEffects) {
+      nextEmotion = next.general.soundEffects ? 'happy' : 'neutral';
+      nextNuance = next.general.soundEffects ? 'satisfied' : 'relaxed';
+      whisper = next.general.soundEffects ? 'Audio chimes ON' : 'Audio chimes OFF';
+    } else if (prev.appearance.reducedMotion !== next.appearance.reducedMotion) {
+      nextEmotion = next.appearance.reducedMotion ? 'neutral' : 'happy';
+      nextNuance = next.appearance.reducedMotion ? 'relaxed' : 'gentle-breathing';
+    } else if (prev.voice.ttsEnabled !== next.voice.ttsEnabled) {
+      nextEmotion = next.voice.ttsEnabled ? 'speaking' : 'neutral';
+      nextNuance = next.voice.ttsEnabled ? 'anticipating' : 'none';
+      whisper = next.voice.ttsEnabled ? 'Voice replies ON' : 'Voice replies OFF';
+    } else if (prev.ai.providerMode !== next.ai.providerMode) {
+      nextEmotion = 'curious';
+      nextNuance = 'concentrating';
+      whisper = `AI: ${next.ai.providerMode}`;
+    } else if (prev.appearance.notchShape !== next.appearance.notchShape) {
+      nextEmotion = 'playful';
+      nextNuance = 'satisfied';
+    }
+
+    if (prev.privacy.persistChatHistory !== next.privacy.persistChatHistory) {
+      if (next.privacy.persistChatHistory) {
+        safeWriteJson(HISTORY_STORAGE_KEY, this.state.messages);
+      } else {
+        safeRemoveKey(HISTORY_STORAGE_KEY);
+      }
+    }
+
+    this.state = {
+      ...this.state,
+      settings: next,
+      emotion: nextEmotion,
+      emotionNuance: nextNuance,
+    };
+    if (whisper) {
+      this.showWhisper(whisper);
+    }
     safeWriteJson(SETTINGS_STORAGE_KEY, next);
     this.channel?.postMessage({ type: 'SYNC_SETTINGS', settings: next });
     this.emit();
@@ -894,6 +1169,18 @@ class XeroSingletonStore {
       }));
       return;
     }
+    const presetEmotions: Record<string, { emotion: EmotionState; nuance: EmotionNuance }> = {
+      Cyan: { emotion: 'happy', nuance: 'satisfied' },
+      'Ice White': { emotion: 'focused', nuance: 'relaxed' },
+      Crimson: { emotion: 'excited', nuance: 'anticipating' },
+      Violet: { emotion: 'curious', nuance: 'anticipating' },
+      Emerald: { emotion: 'happy', nuance: 'gentle-breathing' },
+      Amber: { emotion: 'playful', nuance: 'satisfied' },
+      Sakura: { emotion: 'affectionate', nuance: 'satisfied' },
+      Midnight: { emotion: 'focused', nuance: 'relaxed' },
+      'Soft Blue': { emotion: 'happy', nuance: 'gentle-breathing' },
+    };
+    const mood = presetEmotions[found.name] ?? { emotion: 'happy' as EmotionState, nuance: 'satisfied' as EmotionNuance };
     this.updateSettings((p) => ({
       ...p,
       appearance: {
@@ -903,10 +1190,14 @@ class XeroSingletonStore {
         faceColor: found.faceColor,
       },
     }));
+    this.state = { ...this.state, emotion: mood.emotion, emotionNuance: mood.nuance };
+    this.showWhisper(`${found.name} theme~`);
+    this.emit();
   }
 
   resetSettings(): void {
     this.updateSettings(() => DEFAULT_SETTINGS);
+    this.state = { ...this.state, emotion: 'neutral', emotionNuance: 'waking' };
     this.pushNotification('Settings Reset', 'Restored default XERO configuration.', 'info');
   }
 
@@ -987,7 +1278,12 @@ class XeroSingletonStore {
       kind,
       createdAt: now,
     };
-    this.state = { ...this.state, timers: [item, ...this.state.timers] };
+    this.state = {
+      ...this.state,
+      timers: [item, ...this.state.timers],
+      emotion: 'focused',
+      emotionNuance: 'concentrating',
+    };
     audioService.playSuccessChime(this.state.settings.general.soundEffects);
     this.emit();
     this.ensureTickLoop();
@@ -1026,6 +1322,33 @@ class XeroSingletonStore {
     this.ensureTickLoop();
   }
 
+  pauseActiveTimer(): string {
+    const running = this.state.timers.find((t) => t.running);
+    if (!running) return 'No running timer to pause.';
+    const rem = computeRemainingSeconds(running);
+    this.toggleTimer(running.id);
+    return `Paused "${running.label}" with ${rem >= 60 ? `${Math.floor(rem / 60)}m ${rem % 60}s` : `${rem}s`} left.`;
+  }
+
+  resumePausedTimer(): string {
+    const paused = this.state.timers.find((t) => !t.running && t.remainingSec > 0);
+    if (!paused) return 'No paused timer to resume.';
+    this.toggleTimer(paused.id);
+    return `Resumed "${paused.label}" (${paused.remainingSec}s remaining).`;
+  }
+
+  getTimersRemainingSummary(): string {
+    if (this.state.timers.length === 0) return 'No active timers right now.';
+    return this.state.timers
+      .slice(0, 3)
+      .map((t) => {
+        const rem = computeRemainingSeconds(t);
+        const formatted = rem >= 60 ? `${Math.floor(rem / 60)}m ${rem % 60}s` : `${rem}s`;
+        return `${t.label}: ${formatted}${t.running ? '' : ' (paused)'}`;
+      })
+      .join(' · ');
+  }
+
   addReminder(text: string, delaySec: number): void {
     const item: ReminderItem = {
       id: `rem-${Date.now()}`,
@@ -1034,6 +1357,18 @@ class XeroSingletonStore {
       completed: false,
     };
     this.state = { ...this.state, reminders: [item, ...this.state.reminders] };
+    this.emit();
+    this.ensureTickLoop();
+  }
+
+  toggleReminder(id: string): void {
+    this.state = {
+      ...this.state,
+      reminders: this.state.reminders.map((r) =>
+        r.id === id ? { ...r, completed: !r.completed } : r
+      ),
+    };
+    audioService.playPopChime(this.state.settings.general.soundEffects);
     this.emit();
     this.ensureTickLoop();
   }
@@ -1147,10 +1482,34 @@ class XeroSingletonStore {
     this.emit();
   }
 
+  clearNotes(): void {
+    this.state = { ...this.state, notes: [] };
+    this.persistProductivity();
+    this.emit();
+  }
+
+  completeAllTodos(): void {
+    this.state = {
+      ...this.state,
+      todos: this.state.todos.map((t) => ({ ...t, done: true })),
+      emotion: 'excited',
+      emotionNuance: 'satisfied',
+    };
+    this.persistProductivity();
+    audioService.playSuccessChime(this.state.settings.general.soundEffects);
+    this.emit();
+  }
+
   logWater(deltaMl = 250): void {
     const next = Math.max(0, Math.min(5000, this.state.waterMl + deltaMl));
-    this.state = { ...this.state, waterMl: next };
+    this.state = {
+      ...this.state,
+      waterMl: next,
+      emotion: 'happy',
+      emotionNuance: 'satisfied',
+    };
     this.persistProductivity();
+    this.showWhisper('Stay hydrated~');
     audioService.playPopChime(this.state.settings.general.soundEffects);
     this.emit();
   }
@@ -1205,16 +1564,22 @@ class XeroSingletonStore {
     this.state = {
       ...this.state,
       systemStatus: { ...this.state.systemStatus, nightLight: next },
+      emotion: next ? 'sleepy' : 'happy',
+      emotionNuance: next ? 'relaxed' : 'waking',
     };
+    this.showWhisper(next ? 'Night Light ON' : 'Daylight clear');
     audioService.playPopChime(this.state.settings.general.soundEffects);
     this.emit();
   }
 
   setBrightness(brightness: number): void {
     const clamped = Math.round(Math.min(100, Math.max(35, brightness)));
+    const prev = this.state.systemStatus.brightness;
     this.state = {
       ...this.state,
       systemStatus: { ...this.state.systemStatus, brightness: clamped },
+      emotion: clamped <= 65 ? 'sleepy' : clamped > prev ? 'happy' : 'curious',
+      emotionNuance: clamped <= 65 ? 'relaxed' : 'waking',
     };
     this.emit();
   }
@@ -1226,6 +1591,8 @@ class XeroSingletonStore {
       this.state = {
         ...this.state,
         systemStatus: { ...this.state.systemStatus, wakeLockActive: false },
+        emotion: 'neutral',
+        emotionNuance: 'relaxed',
       };
       this.emit();
       return;
@@ -1244,6 +1611,8 @@ class XeroSingletonStore {
       this.state = {
         ...this.state,
         systemStatus: { ...this.state.systemStatus, wakeLockActive: true },
+        emotion: 'focused',
+        emotionNuance: 'concentrating',
       };
       this.emit();
     } catch {
@@ -1263,6 +1632,8 @@ class XeroSingletonStore {
     this.state = {
       ...this.state,
       music: { ...this.state.music, playing: true },
+      emotion: 'playful',
+      emotionNuance: 'anticipating',
     };
     this.emit();
     this.ensureTickLoop();
@@ -1273,6 +1644,8 @@ class XeroSingletonStore {
     this.state = {
       ...this.state,
       music: { ...this.state.music, playing: false },
+      emotion: 'neutral',
+      emotionNuance: 'relaxed',
     };
     this.emit();
     this.ensureTickLoop();
@@ -1301,6 +1674,8 @@ class XeroSingletonStore {
     this.state = {
       ...this.state,
       music: { ...this.state.music, trackIndex: nextIndex, elapsedSec: 0 },
+      emotion: 'happy',
+      emotionNuance: 'anticipating',
     };
     this.emit();
   }
@@ -1313,6 +1688,8 @@ class XeroSingletonStore {
     this.state = {
       ...this.state,
       music: { ...this.state.music, trackIndex: prevIndex, elapsedSec: 0 },
+      emotion: 'curious',
+      emotionNuance: 'relaxed',
     };
     this.emit();
   }
@@ -1346,17 +1723,40 @@ class XeroSingletonStore {
   }
 
   setVolume(percent: number): void {
+    const prev = this.state.volume;
     const clamped = Math.round(Math.min(100, Math.max(0, percent)));
     const nextMuted = clamped === 0;
     audioService.setMasterVolume(clamped, nextMuted);
     audioService.playVolumeTick(this.state.settings.general.soundEffects, clamped);
     const nextEmotion: EmotionState =
-      clamped === 0 ? 'sleepy' : clamped >= 90 ? 'excited' : 'happy';
+      clamped === 0
+        ? 'sleepy'
+        : clamped >= 85
+          ? 'excited'
+          : clamped > prev
+            ? 'happy'
+            : clamped < prev
+              ? 'curious'
+              : 'happy';
+    const nextNuance: EmotionNuance =
+      clamped === 0
+        ? 'relaxed'
+        : clamped >= 85
+          ? 'anticipating'
+          : clamped < prev
+            ? 'gentle-breathing'
+            : 'satisfied';
+    if (clamped === 100) {
+      this.showWhisper('Max volume!');
+    } else if (clamped === 0) {
+      this.showWhisper('Audio silent~');
+    }
     this.state = {
       ...this.state,
       volume: clamped,
       muted: nextMuted,
       emotion: nextEmotion,
+      emotionNuance: nextNuance,
     };
     this.scheduleLiveHud(
       {
@@ -1367,7 +1767,7 @@ class XeroSingletonStore {
         muted: nextMuted,
         tick: (this.state.liveHud?.tick ?? 0) + 1,
       },
-      2300
+      3200
     );
   }
 
@@ -1382,10 +1782,12 @@ class XeroSingletonStore {
     if (!nextMuted) {
       audioService.playVolumeTick(this.state.settings.general.soundEffects, this.state.volume);
     }
+    this.showWhisper(nextMuted ? 'Muted~' : 'Audio restored!');
     this.state = {
       ...this.state,
       muted: nextMuted,
       emotion: nextMuted ? 'sleepy' : 'happy',
+      emotionNuance: nextMuted ? 'relaxed' : 'waking',
     };
     this.scheduleLiveHud(
       {
@@ -1396,7 +1798,7 @@ class XeroSingletonStore {
         muted: nextMuted,
         tick: (this.state.liveHud?.tick ?? 0) + 1,
       },
-      2300
+      3200
     );
   }
 
@@ -1617,6 +2019,49 @@ class XeroSingletonStore {
     this.emit();
   }
 
+  clearAllPreferences(): void {
+    this.state = { ...this.state, memories: [] };
+    safeWriteJson(MEMORY_STORAGE_KEY, []);
+    this.writeDeduplicator.clear();
+    this.emit();
+  }
+
+  exportNotesMarkdown(): string {
+    return formatNotesAsMarkdown(this.state.notes, this.state.todos);
+  }
+
+  clearAllLocalData(): void {
+    safeRemoveKey(HISTORY_STORAGE_KEY);
+    safeRemoveKey(MEMORY_STORAGE_KEY);
+    safeRemoveKey(CLIPBOARD_STORAGE_KEY);
+    safeRemoveKey(FILES_STORAGE_KEY);
+    safeRemoveKey(PRODUCTIVITY_STORAGE_KEY);
+    this.writeDeduplicator.clear();
+    this.state = {
+      ...this.state,
+      memories: [],
+      clipboard: [],
+      files: [],
+      todos: [],
+      notes: [],
+      timers: [],
+      reminders: [],
+      pendingConfirmation: null,
+      lastCapturedMarkdown: null,
+      messages: [
+        {
+          id: `msg-${Date.now()}`,
+          role: 'assistant',
+          text: 'All local transcripts, notes, memories, and shelf items cleared.',
+          timestamp: Date.now(),
+          provider: 'offline',
+          emotion: 'neutral',
+        },
+      ],
+    };
+    this.emit();
+  }
+
   // Notification banner inside island
   pushNotification(title: string, detail: string, tone: NotificationBanner['tone'] = 'info'): void {
     if (this.notifTimeout !== null && typeof window !== 'undefined') {
@@ -1640,9 +2085,28 @@ class XeroSingletonStore {
     this.emit();
   }
 
-  // Shared command-action dispatcher for voice/text execution
+  // Shared command-action dispatcher for voice/text & Jarvis compound execution
+  executeActions(actions: OfflineAction[]): void {
+    for (const act of actions) {
+      this.executeOfflineAction(act);
+    }
+  }
+
   executeOfflineAction(action: OfflineAction): void {
     const { type, payload } = action;
+    if (
+      type === 'add-note' ||
+      type === 'add-todo' ||
+      type === 'add-shopping' ||
+      type === 'add-reminder' ||
+      type === 'remember-fact' ||
+      type === 'capture-that'
+    ) {
+      if (this.writeDeduplicator.isDuplicate(type, payload)) {
+        return;
+      }
+    }
+
     if (type === 'start-timer' && payload?.seconds) {
       this.startTimer(Number(payload.seconds), String(payload.label || 'Timer'));
     } else if (type === 'start-pomodoro') {
@@ -1652,8 +2116,75 @@ class XeroSingletonStore {
       this.setMenuOpen(true, 'productivity');
     } else if (type === 'clear-timers') {
       this.clearTimers();
+    } else if (type === 'pause-timer') {
+      const msg = this.pauseActiveTimer();
+      this.triggerTaskResultHud('Timer Status', msg);
+    } else if (type === 'resume-timer') {
+      const msg = this.resumePausedTimer();
+      this.triggerTaskResultHud('Timer Status', msg);
+    } else if (type === 'timer-status') {
+      const msg = this.getTimersRemainingSummary();
+      this.addMessage({ role: 'assistant', text: msg, provider: 'offline', emotion: 'focused' });
+    } else if (type === 'set-response-depth' && payload?.depth) {
+      this.setResponseDepth(payload.depth as ResponseDepth);
+    } else if (type === 'catch-me-up') {
+      const summary = summarizeSessionCatchUp({
+        messages: this.state.messages,
+        timers: this.state.timers,
+        todos: this.state.todos,
+        notes: this.state.notes,
+      });
+      this.addMessage({
+        role: 'assistant',
+        text: summary.formattedText,
+        provider: 'offline',
+        emotion: 'focused',
+        actionsApplied: ['Session Catch-Up'],
+      });
+    } else if (type === 'capture-that') {
+      const captured = buildCaptureNoteFromMessages(
+        this.state.messages,
+        typeof payload?.text === 'string' ? payload.text : undefined,
+        Boolean(payload?.asChecklist)
+      );
+      this.addNote(captured.noteText);
+      if (Boolean(payload?.asChecklist) && captured.checklistItems.length > 0) {
+        this.addTodoItems(captured.checklistItems.slice(0, 6), 'todo');
+      }
+      this.state = {
+        ...this.state,
+        lastCapturedMarkdown: {
+          title: `xero-capture-${Date.now().toString().slice(-4)}.md`,
+          markdown: captured.markdown,
+          timestamp: Date.now(),
+        },
+      };
+      this.triggerTaskResultHud('Captured Note', 'Ready for Markdown export in Notes');
+      this.emit();
+    } else if (type === 'request-confirmation' && payload?.summary && payload?.targetActionType) {
+      const targetPayload: Record<string, string | number | boolean | string[]> = {};
+      for (const [k, v] of Object.entries(payload)) {
+        if (k !== 'kind' && k !== 'summary' && k !== 'targetActionType') {
+          targetPayload[k] = v;
+        }
+      }
+      this.requestConfirmation({
+        kind: (payload.kind as 'destructive' | 'preference') || 'destructive',
+        summary: String(payload.summary),
+        actionType: String(payload.targetActionType),
+        payload: targetPayload,
+      });
+    } else if (type === 'clear-preferences') {
+      this.clearAllPreferences();
+      this.triggerTaskResultHud('Preferences Cleared', 'Local preferences reset');
     } else if (type === 'add-reminder' && payload?.text) {
       this.addReminder(String(payload.text), Number(payload.seconds || 60));
+    } else if (type === 'add-note' && payload?.text) {
+      this.addNote(String(payload.text));
+      audioService.playSuccessChime(this.state.settings.general.soundEffects);
+      this.triggerTaskResultHud('Saved Note', String(payload.text));
+    } else if (type === 'open-tab' && payload?.tab) {
+      this.setIslandExpanded(true, payload.tab as IslandWidgetTab);
     } else if (type === 'add-todo' && Array.isArray(payload?.items)) {
       this.addTodoItems(payload.items as string[], 'todo');
     } else if (type === 'add-shopping' && Array.isArray(payload?.items)) {
@@ -1698,6 +2229,64 @@ class XeroSingletonStore {
       this.setBrightness(Number(payload.brightness));
     } else if (type === 'toggle-awake') {
       void this.toggleWakeLock();
+    } else if (type === 'set-appearance-preset' && payload?.preset) {
+      this.applyAppearancePreset(String(payload.preset) as AppearancePresetName);
+    } else if (type === 'set-emotion' && payload?.emotion) {
+      this.setEmotion(payload.emotion as EmotionState, false, 'satisfied');
+    } else if (type === 'clear-clipboard') {
+      this.clearClipboard();
+    } else if (type === 'clear-notes') {
+      this.clearNotes();
+    } else if (type === 'complete-todos') {
+      this.completeAllTodos();
+    } else if (type === 'update-setting' && payload?.key) {
+      const k = String(payload.key);
+      const v = payload.value;
+      this.updateSettings((prev) => {
+        switch (k) {
+          case 'gamingMode':
+          case 'launchMinimized':
+          case 'soundEffects':
+          case 'spontaneousBehavior':
+          case 'autoExpandOnTrackChange':
+            return { ...prev, general: { ...prev.general, [k]: Boolean(v) } };
+          case 'autoHideDelayMs':
+          case 'autoCollapseMs':
+            return { ...prev, general: { ...prev.general, [k]: Number(v) || 0 } };
+          case 'reducedMotion':
+            return { ...prev, appearance: { ...prev.appearance, reducedMotion: Boolean(v) } };
+          case 'notchShape':
+            return { ...prev, appearance: { ...prev.appearance, notchShape: String(v) as 'bezel' | 'pill' | 'squircle' } };
+          case 'islandOpacity':
+          case 'glowIntensity':
+          case 'borderIllumination':
+          case 'islandScale':
+            return { ...prev, appearance: { ...prev.appearance, [k]: Number(v) } };
+          case 'ttsEnabled':
+          case 'wakeWordEnabled':
+            return { ...prev, voice: { ...prev.voice, [k]: Boolean(v) } };
+          case 'providerMode':
+            return { ...prev, ai: { ...prev.ai, providerMode: String(v) as XeroSettings['ai']['providerMode'] } };
+          case 'captureClipboardHistory':
+          case 'persistChatHistory':
+            return { ...prev, privacy: { ...prev.privacy, [k]: Boolean(v) } };
+          default:
+            return prev;
+        }
+      });
+    } else if (type === 'copy-generated' && payload?.value) {
+      const val = String(payload.value);
+      if (typeof navigator !== 'undefined') {
+        void navigator.clipboard?.writeText(val).catch(() => {});
+      }
+      this.state = {
+        ...this.state,
+        clipboard: [
+          { id: `clip-${Date.now()}`, text: val, copiedAt: Date.now() },
+          ...this.state.clipboard.slice(0, 19),
+        ],
+      };
+      this.triggerTaskResultHud(`Generated ${String(payload.kind || 'Secret')}`, 'Copied to Clipboard History');
     } else if (type === 'shelf-image-op' && payload?.op) {
       void this.applyShelfImageOp(payload.op as ImageTransformKind);
     } else if (type === 'shelf-summarize') {

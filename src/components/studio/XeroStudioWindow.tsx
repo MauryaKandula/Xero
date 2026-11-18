@@ -1,12 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
   Activity,
   Bot,
   Cpu,
+  Download,
   ExternalLink,
   HardDrive,
+  HeartPulse,
   Minus,
   Palette,
+  Pause,
+  Play,
   RefreshCw,
   RotateCcw,
   Sliders,
@@ -20,6 +25,7 @@ import {
 } from 'lucide-react';
 import { xeroStore, useXeroStore } from '../../core/store';
 import { discoverLocalModels } from '../../core/aiClient';
+import { extractWakeWordCommand } from '../../core/offlineEngine';
 import { ALL_EMOTIONS, EMOTION_SPECS } from '../../core/emotions';
 import { audioService } from '../../core/audioEngine';
 import { APPEARANCE_PRESETS } from '../../core/productivity';
@@ -31,6 +37,14 @@ import type {
   StudioTab,
   VoiceResponseMode,
 } from '../../core/types';
+import {
+  appendHealthSample,
+  summarizeHealthHistory,
+  type SystemHealthApiPayload,
+  type SystemHealthSample,
+} from '../../core/systemHealth';
+import { usePWAInstall } from '../../core/usePWAInstall';
+import { SystemHealthChart } from './SystemHealthChart';
 import { XeroFace } from '../xero/XeroFace';
 
 interface XeroStudioWindowProps {
@@ -52,6 +66,7 @@ const STUDIO_NAV: Array<{
   { id: 'general', label: 'General', icon: Sliders },
   { id: 'appearance', label: 'Appearance', icon: Palette },
   { id: 'ai', label: 'AI & Local LLM', icon: Cpu },
+  { id: 'health', label: 'System Health', icon: HeartPulse },
   { id: 'voice', label: 'Voice & Audio', icon: Volume2 },
   { id: 'personalization', label: 'Personalization', icon: User },
   { id: 'expressions', label: 'Expressions', icon: Smile },
@@ -60,7 +75,8 @@ const STUDIO_NAV: Array<{
 
 export const XeroStudioWindow: React.FC<XeroStudioWindowProps> = ({ standalone = false }) => {
   const state = useXeroStore();
-  const { settings, studio, emotion, isOnline, geminiConfigured, memories, timers, files, clipboard } = state;
+  const { settings, studio, emotion, isOnline, geminiConfigured, memories, timers, files, clipboard, llmMetrics, liveSession, responseDepth } = state;
+  const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
 
   const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
   const [localCheckState, setLocalCheckState] = useState<{
@@ -70,6 +86,11 @@ export const XeroStudioWindow: React.FC<XeroStudioWindowProps> = ({ standalone =
   const [newMemoryInput, setNewMemoryInput] = useState('');
   const [micDevices, setMicDevices] = useState<Array<{ deviceId: string; label: string }>>([]);
   const [vocabDraft, setVocabDraft] = useState(settings.voice.customVocabulary.join(', '));
+  const [testWakePhrase, setTestWakePhrase] = useState('Hey Xero, start focus mode');
+  const [testWakeResult, setTestWakeResult] = useState<string | null>(null);
+  const [healthHistory, setHealthHistory] = useState<SystemHealthSample[]>([]);
+  const [latestHealth, setLatestHealth] = useState<SystemHealthApiPayload | null>(null);
+  const [healthPaused, setHealthPaused] = useState(false);
 
   // Dragging state for desktop-simulated window
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
@@ -113,6 +134,51 @@ export const XeroStudioWindow: React.FC<XeroStudioWindowProps> = ({ standalone =
     };
   }, [standalone]);
 
+  // Poll /api/system/health for live CPU, Memory & Local LLM runtime charts
+  useEffect(() => {
+    if (studio.activeTab !== 'health' && !standalone) return;
+    if (healthPaused) return;
+
+    let cancelled = false;
+    const pollHealth = async () => {
+      try {
+        const params = new URLSearchParams({
+          endpoint: settings.ai.localEndpoint,
+          format: settings.ai.localFormat,
+        });
+        const res = await fetch(`/api/system/health?${params.toString()}`);
+        if (!res.ok) return;
+        const payload = (await res.json()) as SystemHealthApiPayload;
+        if (cancelled || !payload?.ok) return;
+
+        setLatestHealth(payload);
+        setHealthHistory((prev) =>
+          appendHealthSample(prev, {
+            timestamp: payload.timestamp,
+            cpuPct: payload.cpu.percent,
+            memoryPct: payload.memory.percent,
+            memoryUsedMb: payload.memory.usedMb,
+            memoryTotalMb: payload.memory.totalMb,
+            processRssMb: payload.memory.processRssMb,
+            load1m: payload.cpu.load1m,
+          })
+        );
+      } catch {
+        // Fallback gently if backend probe is momentarily busy
+      }
+    };
+
+    void pollHealth();
+    const intervalId = window.setInterval(() => {
+      void pollHealth();
+    }, 1500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [studio.activeTab, standalone, healthPaused, settings.ai.localEndpoint, settings.ai.localFormat]);
+
   const handleTestLocalLLM = async () => {
     setLocalCheckState({ status: 'checking', message: 'Probing local endpoint…' });
     const res = await discoverLocalModels(settings.ai.localEndpoint, settings.ai.localFormat);
@@ -139,12 +205,8 @@ export const XeroStudioWindow: React.FC<XeroStudioWindowProps> = ({ standalone =
     }
   };
 
-  const handlePopOutWindow = () => {
-    const url = `${window.location.origin}/?window=studio`;
-    window.open(url, 'xero-studio-window', 'width=980,height=660');
-  };
-
   const accent = settings.appearance.accentColor;
+  const reducedMotion = settings.appearance.reducedMotion;
 
   const windowShellClass = standalone
     ? 'w-full min-h-screen bg-[#0B0E12] text-[#EDF5FF] flex flex-col'
@@ -160,9 +222,13 @@ export const XeroStudioWindow: React.FC<XeroStudioWindowProps> = ({ standalone =
       };
 
   return (
-    <section
+    <motion.section
       aria-label="XERO Studio Control Centre"
       data-testid="xero-studio-window"
+      initial={standalone || reducedMotion ? false : { opacity: 0, scale: 0.96, y: 10 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      exit={standalone || reducedMotion ? undefined : { opacity: 0, scale: 0.96, y: 8 }}
+      transition={{ type: 'spring', stiffness: 360, damping: 28, mass: 0.7 }}
       className={windowShellClass}
       style={windowStyle}
     >
@@ -198,16 +264,17 @@ export const XeroStudioWindow: React.FC<XeroStudioWindowProps> = ({ standalone =
         <div className="flex items-center gap-2 shrink-0">
           {!standalone && (
             <>
-              <button
-                type="button"
-                onClick={handlePopOutWindow}
+              <a
+                href="/?window=studio"
+                target="_blank"
+                rel="noopener noreferrer"
                 aria-label="Pop out Studio into browser window"
-                title="Open Studio in a separate browser window"
+                title="Open Studio in a separate browser tab"
                 className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs text-[#8793A3] hover:text-[#EDF5FF] hover:bg-white/6 transition-colors whitespace-nowrap cursor-pointer"
               >
                 <ExternalLink className="w-3.5 h-3.5" />
                 <span>Pop Out</span>
-              </button>
+              </a>
               <button
                 type="button"
                 onClick={() => xeroStore.minimizeStudio(true)}
@@ -258,7 +325,16 @@ export const XeroStudioWindow: React.FC<XeroStudioWindowProps> = ({ standalone =
         </nav>
 
         {/* Content Viewport */}
-        <main className="flex-1 min-w-0 overflow-y-auto p-6 space-y-6">
+        <main className="flex-1 min-w-0 overflow-y-auto p-6">
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={studio.activeTab}
+              initial={reducedMotion ? false : { opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={reducedMotion ? undefined : { opacity: 0, y: -4 }}
+              transition={{ duration: reducedMotion ? 0.01 : 0.14, ease: [0.16, 1, 0.3, 1] }}
+              className="space-y-6"
+            >
           {/* GENERAL */}
           {studio.activeTab === 'general' && (
             <div className="space-y-6 max-w-2xl">
@@ -392,6 +468,31 @@ export const XeroStudioWindow: React.FC<XeroStudioWindowProps> = ({ standalone =
                     <option value={8000}>8 seconds</option>
                     <option value={15000}>15 seconds</option>
                     <option value={30000}>30 seconds</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 p-4">
+                  <div>
+                    <div className="text-sm font-medium text-[#EDF5FF]">Auto-Hide into Top Bezel</div>
+                    <div className="text-xs text-[#8793A3]">
+                      Tuck XERO smoothly up into the top screen edge after inactivity (move pointer to top edge to peek out).
+                    </div>
+                  </div>
+                  <select
+                    aria-label="Auto-Hide into Top Bezel"
+                    value={settings.general.autoHideDelayMs ?? 0}
+                    onChange={(e) =>
+                      xeroStore.updateSettings((p) => ({
+                        ...p,
+                        general: { ...p.general, autoHideDelayMs: Number(e.target.value) },
+                      }))
+                    }
+                    className="px-3 py-1.5 rounded-lg bg-[#050608] border border-white/12 text-xs text-[#EDF5FF]"
+                  >
+                    <option value={0}>Manual Only</option>
+                    <option value={12000}>12 seconds</option>
+                    <option value={25000}>25 seconds</option>
+                    <option value={60000}>60 seconds</option>
                   </select>
                 </div>
               </div>
@@ -806,6 +907,48 @@ export const XeroStudioWindow: React.FC<XeroStudioWindowProps> = ({ standalone =
                   </select>
                 </div>
 
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-xs text-[#8793A3]">Live Voice Model</span>
+                  <select
+                    aria-label="Live Voice Model"
+                    value={settings.ai.liveModel}
+                    onChange={(e) =>
+                      xeroStore.updateSettings((p) => ({
+                        ...p,
+                        ai: {
+                          ...p.ai,
+                          liveModel: e.target.value as 'gemini-3.8-live' | 'gemini-3.8-live-extended-thinking',
+                        },
+                      }))
+                    }
+                    className="px-3 py-1.5 rounded-lg bg-[#050608] border border-white/12 text-xs font-mono-tabular text-[#EDF5FF]"
+                  >
+                    <option value="gemini-3.8-live">gemini-3.8-live (Fast Real-Time)</option>
+                    <option value="gemini-3.8-live-extended-thinking">gemini-3.8-live-extended-thinking (Reasoning)</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-xs text-[#8793A3]">Live Female Voice</span>
+                  <select
+                    aria-label="Live Female Voice"
+                    value={settings.ai.liveVoiceName}
+                    onChange={(e) =>
+                      xeroStore.updateSettings((p) => ({
+                        ...p,
+                        ai: {
+                          ...p.ai,
+                          liveVoiceName: e.target.value as 'Kore' | 'Zephyr',
+                        },
+                      }))
+                    }
+                    className="px-3 py-1.5 rounded-lg bg-[#050608] border border-white/12 text-xs text-[#EDF5FF]"
+                  >
+                    <option value="Kore">Kore (Warm · JARVIS Calibrated)</option>
+                    <option value="Zephyr">Zephyr (Bright · Crisp)</option>
+                  </select>
+                </div>
+
                 <div>
                   <label htmlFor="system-prompt-textarea" className="block text-xs text-[#8793A3] mb-1">
                     Custom System Instruction
@@ -827,6 +970,182 @@ export const XeroStudioWindow: React.FC<XeroStudioWindowProps> = ({ standalone =
               </div>
             </div>
           )}
+
+          {/* SYSTEM HEALTH (D3.JS CPU + MEMORY CHARTS & LOCAL LLM TELEMETRY) */}
+          {studio.activeTab === 'health' && (() => {
+            const summary = summarizeHealthHistory(healthHistory, llmMetrics);
+            const cpuPoints = healthHistory.map((s) => ({
+              timestamp: s.timestamp,
+              value: s.cpuPct,
+              detail: `CPU ${s.cpuPct.toFixed(1)}% · Load 1m ${s.load1m.toFixed(2)}`,
+            }));
+            const memPoints = healthHistory.map((s) => ({
+              timestamp: s.timestamp,
+              value: s.memoryPct,
+              detail: `${s.memoryUsedMb} / ${s.memoryTotalMb} MB · Node RSS ${s.processRssMb} MB`,
+            }));
+            const statusColor =
+              summary.loadStatus === 'Heavy'
+                ? '#FF4567'
+                : summary.loadStatus === 'Elevated'
+                  ? '#FFC857'
+                  : '#39FF88';
+
+            return (
+              <div data-testid="studio-system-health" className="space-y-5 max-w-3xl">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="font-display text-lg font-semibold text-[#EDF5FF]">
+                      System Health &amp; Local LLM Performance
+                    </h2>
+                    <p className="text-sm text-[#8793A3] mt-1">
+                      Live D3.js host CPU, Memory, and inference latency telemetry while running local or cloud models.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setHealthPaused((p) => !p)}
+                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-[#12161B] hover:bg-white/8 border border-white/12 text-xs text-[#EDF5FF] cursor-pointer"
+                    >
+                      {healthPaused ? (
+                        <>
+                          <Play className="w-3.5 h-3.5 text-[#39FF88]" />
+                          <span>Resume</span>
+                        </>
+                      ) : (
+                        <>
+                          <Pause className="w-3.5 h-3.5 text-[#00E5FF]" />
+                          <span>Pause</span>
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setHealthHistory([])}
+                      className="px-2.5 py-1.5 rounded-lg bg-[#12161B] hover:bg-white/8 border border-white/12 text-xs text-[#8793A3] hover:text-[#EDF5FF] cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                {/* D3.js Small Line Charts */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <SystemHealthChart
+                    testId="health-cpu-chart"
+                    title="CPU Usage"
+                    subtitle={
+                      latestHealth
+                        ? `${latestHealth.cpu.cores} cores · 1m load ${latestHealth.cpu.load1m.toFixed(2)}`
+                        : 'Sampling host CPU ticks…'
+                    }
+                    color="#00E5FF"
+                    data={cpuPoints}
+                    peakValue={summary.peakCpuPct}
+                    avgValue={summary.avgCpuPct}
+                  />
+
+                  <SystemHealthChart
+                    testId="health-memory-chart"
+                    title="Memory Usage"
+                    subtitle={
+                      latestHealth
+                        ? `${latestHealth.memory.usedMb} / ${latestHealth.memory.totalMb} MB · RSS ${latestHealth.memory.processRssMb} MB`
+                        : 'Sampling host RAM…'
+                    }
+                    color="#9C6BFF"
+                    data={memPoints}
+                    peakValue={summary.peakMemoryPct}
+                    avgValue={summary.avgMemoryPct}
+                  />
+                </div>
+
+                {/* Local LLM Performance & Host Vitals Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                  <div className="p-3 rounded-xl bg-[#12161B] border border-white/10">
+                    <div className="text-[10px] uppercase tracking-wider text-[#8793A3]">Thermal / Load</div>
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: statusColor }} />
+                      <span className="text-sm font-semibold text-[#EDF5FF]">{summary.loadStatus}</span>
+                    </div>
+                    <div className="text-[11px] font-mono-tabular text-[#8793A3] mt-0.5">
+                      Avg CPU {summary.avgCpuPct.toFixed(1)}%
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-[#12161B] border border-white/10">
+                    <div className="text-[10px] uppercase tracking-wider text-[#8793A3]">Local LLM Node</div>
+                    <div className="text-sm font-semibold text-[#EDF5FF] mt-1 truncate">
+                      {latestHealth?.localLlm?.reachable ? 'Reachable' : 'Standby'}
+                    </div>
+                    <div className="text-[11px] font-mono-tabular text-[#8793A3] mt-0.5 truncate">
+                      {settings.ai.localModel || 'llama3.2'} ({settings.ai.localFormat})
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-[#12161B] border border-white/10">
+                    <div className="text-[10px] uppercase tracking-wider text-[#8793A3]">Avg Inference</div>
+                    <div className="text-sm font-mono-tabular font-semibold text-[#EDF5FF] mt-1">
+                      {summary.avgLatencyMs > 0 ? `${summary.avgLatencyMs} ms` : '—'}
+                    </div>
+                    <div className="text-[11px] font-mono-tabular text-[#8793A3] mt-0.5">
+                      {llmMetrics.length} run(s) logged
+                    </div>
+                  </div>
+
+                  <div className="p-3 rounded-xl bg-[#12161B] border border-white/10">
+                    <div className="text-[10px] uppercase tracking-wider text-[#8793A3]">Throughput</div>
+                    <div className="text-sm font-mono-tabular font-semibold text-[#EDF5FF] mt-1">
+                      {summary.avgTokensPerSec > 0 ? `${summary.avgTokensPerSec} tok/s` : '—'}
+                    </div>
+                    <div className="text-[11px] font-mono-tabular text-[#8793A3] mt-0.5">
+                      Avg Mem {summary.avgMemoryPct.toFixed(1)}%
+                    </div>
+                  </div>
+                </div>
+
+                {/* Active Loaded Models & Recent Inference Runs */}
+                <div className="p-4 rounded-xl bg-[#12161B] border border-white/10 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-xs font-semibold text-[#EDF5FF]">
+                      Recent AI &amp; Local LLM Inference Runs
+                    </h3>
+                    {latestHealth?.localLlm?.runningModels && latestHealth.localLlm.runningModels.length > 0 && (
+                      <span className="text-[11px] font-mono-tabular text-[#39FF88]">
+                        Loaded: {latestHealth.localLlm.runningModels.map((m) => m.name).join(', ')}
+                      </span>
+                    )}
+                  </div>
+
+                  {llmMetrics.length === 0 ? (
+                    <p className="text-xs text-[#8793A3]">
+                      Send a prompt or Write transform in XERO to record live latency &amp; tokens/sec alongside CPU and Memory charts.
+                    </p>
+                  ) : (
+                    <div className="divide-y divide-white/6 max-h-36 overflow-y-auto">
+                      {llmMetrics.slice(0, 8).map((run) => (
+                        <div
+                          key={run.id}
+                          className="py-1.5 flex items-center justify-between gap-3 text-xs font-mono-tabular"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-[#EDF5FF] truncate">{run.model}</span>
+                            <span className="text-[10px] text-[#8793A3] uppercase">{run.provider}</span>
+                          </div>
+                          <div className="flex items-center gap-4 shrink-0 text-[#8793A3]">
+                            <span>{run.latencyMs} ms</span>
+                            <span className="text-[#00E5FF]">{run.tokensPerSec} tok/s</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* VOICE & AUDIO */}
           {studio.activeTab === 'voice' && (
@@ -889,6 +1208,89 @@ export const XeroStudioWindow: React.FC<XeroStudioWindowProps> = ({ standalone =
                       </option>
                     ))}
                   </select>
+                </div>
+
+                <label className="flex items-center justify-between gap-4 p-4 cursor-pointer">
+                  <div>
+                    <div className="text-sm font-medium text-[#EDF5FF]">Voice Wakeup (&ldquo;{settings.voice.wakeWord}&rdquo;)</div>
+                    <div className="text-xs text-[#8793A3]">
+                      Lightweight Web Speech API listener with backoff retries — wakes XERO even when minimized or unfocused.
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    aria-label="Enable Voice Wakeup"
+                    checked={settings.voice.wakeWordEnabled}
+                    onChange={(e) =>
+                      xeroStore.updateSettings((p) => ({
+                        ...p,
+                        voice: { ...p.voice, wakeWordEnabled: e.target.checked },
+                      }))
+                    }
+                    className="w-4 h-4 accent-[#00E5FF]"
+                  />
+                </label>
+
+                <div className="p-4 space-y-2.5">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <div className="text-sm font-medium text-[#EDF5FF]">Wake Word Phrase</div>
+                      <div className="text-xs text-[#8793A3]">Set any custom phrase (e.g. &ldquo;Hey Xero&rdquo;, &ldquo;Computer&rdquo;, &ldquo;Hey Nova&rdquo;).</div>
+                    </div>
+                    <input
+                      type="text"
+                      aria-label="Wake Word Phrase"
+                      value={settings.voice.wakeWord}
+                      onChange={(e) =>
+                        xeroStore.updateSettings((p) => ({
+                          ...p,
+                          voice: { ...p.voice, wakeWord: e.target.value },
+                        }))
+                      }
+                      onBlur={(e) => {
+                        if (!e.target.value.trim()) {
+                          xeroStore.updateSettings((p) => ({
+                            ...p,
+                            voice: { ...p.voice, wakeWord: 'Hey Xero' },
+                          }));
+                        }
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-[#050608] border border-white/12 text-xs text-[#EDF5FF] w-40"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <input
+                      type="text"
+                      aria-label="Test wake voice command"
+                      value={testWakePhrase}
+                      onChange={(e) => setTestWakePhrase(e.target.value)}
+                      placeholder={`${settings.voice.wakeWord}, set timer 2m`}
+                      className="flex-1 min-w-[180px] px-3 py-1.5 rounded-lg bg-[#050608] border border-white/12 text-xs text-[#EDF5FF]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const parsed = extractWakeWordCommand(testWakePhrase, settings.voice.wakeWord);
+                        if (parsed.matched) {
+                          window.dispatchEvent(new CustomEvent('xero:test-wake', { detail: { phrase: testWakePhrase } }));
+                          setTestWakeResult(
+                            parsed.command
+                              ? `Matched "${settings.voice.wakeWord}" -> Running: "${parsed.command}"`
+                              : `Matched "${settings.voice.wakeWord}" -> Waking voice input`
+                          );
+                        } else {
+                          setTestWakeResult(`Did not match "${settings.voice.wakeWord}"`);
+                        }
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-[#050608] hover:bg-white/8 border border-white/15 text-xs text-[#EDF5FF] cursor-pointer"
+                    >
+                      Test Wake Command
+                    </button>
+                  </div>
+                  {testWakeResult && (
+                    <div className="text-[11px] font-mono-tabular text-[#00E5FF]">{testWakeResult}</div>
+                  )}
                 </div>
 
                 <label className="flex items-center justify-between gap-4 p-4 cursor-pointer">
@@ -1014,26 +1416,87 @@ export const XeroStudioWindow: React.FC<XeroStudioWindowProps> = ({ standalone =
                   />
                 </label>
 
-                <div className="p-4 flex items-center justify-between gap-4">
-                  <div className="text-xs text-[#8793A3]">Preview current voice settings</div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      audioService.speakText(
-                        `Hello, I am ${settings.personalization.assistantName}. Voice output is calibrated.`,
-                        {
-                          enabled: true,
-                          responseMode: 'system-voice',
-                          rate: settings.voice.ttsRate,
-                          pitch: settings.voice.ttsPitch,
-                          lang: settings.voice.dictationLang,
-                        }
-                      )
+                <label className="flex items-center justify-between gap-4 p-4 cursor-pointer">
+                  <div>
+                    <div className="text-sm font-medium text-[#EDF5FF]">Privacy: Persist Transcripts Locally (Opt-In)</div>
+                    <div className="text-xs text-[#8793A3]">
+                      Off by default. When enabled, recent text exchanges are stored in browser localStorage.
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    aria-label="Persist Chat History"
+                    checked={settings.privacy.persistChatHistory}
+                    onChange={(e) =>
+                      xeroStore.updateSettings((p) => ({
+                        ...p,
+                        privacy: { ...p.privacy, persistChatHistory: e.target.checked },
+                      }))
                     }
-                    className="px-3 py-1.5 rounded-lg bg-[#00E5FF] text-[#050608] text-xs font-semibold cursor-pointer"
+                    className="w-4 h-4 accent-[#00E5FF]"
+                  />
+                </label>
+
+                <div className="flex items-center justify-between gap-4 p-4">
+                  <div>
+                    <div className="text-sm font-medium text-[#EDF5FF]">Audio Recording Retention</div>
+                    <div className="text-xs text-[#8793A3]">
+                      Voice frames stream transiently over memory buffers and are never persisted to disk.
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-lg bg-[#050608] border border-white/10 text-[11px] font-mono-tabular text-[#39FF88]">
+                    Off (Locked)
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 p-4">
+                  <div>
+                    <div className="text-sm font-medium text-[#EDF5FF]">Session Response Depth</div>
+                    <div className="text-xs text-[#8793A3]">Or say &ldquo;keep it short&rdquo; / &ldquo;go deeper&rdquo; anytime.</div>
+                  </div>
+                  <select
+                    aria-label="Session Response Depth"
+                    value={responseDepth}
+                    onChange={(e) =>
+                      xeroStore.setResponseDepth(e.target.value as 'concise' | 'balanced' | 'detailed')
+                    }
+                    className="px-3 py-1.5 rounded-lg bg-[#050608] border border-white/12 text-xs text-[#EDF5FF]"
                   >
-                    Test Voice
-                  </button>
+                    <option value="concise">Concise</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="detailed">Detailed</option>
+                  </select>
+                </div>
+
+                <div className="p-4 flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-xs text-[#8793A3]">Preview current voice settings or wipe local storage</div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => xeroStore.clearAllLocalData()}
+                      className="px-3 py-1.5 rounded-lg bg-[#050608] hover:bg-[#FF4567]/15 border border-white/12 hover:border-[#FF4567]/50 text-xs text-[#EDF5FF] cursor-pointer"
+                    >
+                      Clear Local Data
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        audioService.speakText(
+                          `Hello, I am ${settings.personalization.assistantName}. Voice output is calibrated.`,
+                          {
+                            enabled: true,
+                            responseMode: 'system-voice',
+                            rate: settings.voice.ttsRate,
+                            pitch: settings.voice.ttsPitch,
+                            lang: settings.voice.dictationLang,
+                          }
+                        )
+                      }
+                      className="px-3 py-1.5 rounded-lg bg-[#00E5FF] text-[#050608] text-xs font-semibold cursor-pointer"
+                    >
+                      Test Voice
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1113,7 +1576,18 @@ export const XeroStudioWindow: React.FC<XeroStudioWindowProps> = ({ standalone =
               </div>
 
               <div className="p-4 rounded-xl bg-[#12161B] border border-white/10 space-y-3">
-                <div className="text-sm font-semibold text-[#EDF5FF]">Persistent Local Memory</div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-semibold text-[#EDF5FF]">Persistent Local Memory</div>
+                  {memories.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => xeroStore.clearAllPreferences()}
+                      className="px-2.5 py-1 rounded-lg bg-[#050608] hover:bg-[#FF4567]/15 border border-white/10 text-[11px] text-[#8793A3] hover:text-[#FF4567] cursor-pointer"
+                    >
+                      Clear All Preferences
+                    </button>
+                  )}
+                </div>
                 <form
                   onSubmit={(e) => {
                     e.preventDefault();
@@ -1255,10 +1729,90 @@ export const XeroStudioWindow: React.FC<XeroStudioWindowProps> = ({ standalone =
               </div>
 
               <div className="p-4 rounded-xl bg-[#12161B] border border-white/10 space-y-2 text-xs text-[#8793A3]">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-semibold text-[#EDF5FF]">Gemini Live Voice Metrics</span>
+                  <span className="font-mono-tabular text-[11px] uppercase text-[#00E5FF]">
+                    {liveSession.phase}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 font-mono-tabular text-[11px]">
+                  <div className="p-2 rounded-lg bg-[#050608] border border-white/8">
+                    <div className="text-[#8793A3]">Mic Ready</div>
+                    <div className="text-[#EDF5FF] mt-0.5">
+                      {liveSession.metrics.micActivationMs !== null ? `${liveSession.metrics.micActivationMs} ms` : '—'}
+                    </div>
+                  </div>
+                  <div className="p-2 rounded-lg bg-[#050608] border border-white/8">
+                    <div className="text-[#8793A3]">First Audio</div>
+                    <div className="text-[#EDF5FF] mt-0.5">
+                      {liveSession.metrics.firstResponseMs !== null ? `${liveSession.metrics.firstResponseMs} ms` : '—'}
+                    </div>
+                  </div>
+                  <div className="p-2 rounded-lg bg-[#050608] border border-white/8">
+                    <div className="text-[#8793A3]">Interrupt Flush</div>
+                    <div className="text-[#EDF5FF] mt-0.5">
+                      {liveSession.metrics.interruptToSilenceMs !== null ? `${liveSession.metrics.interruptToSilenceMs} ms` : '—'}
+                    </div>
+                  </div>
+                  <div className="p-2 rounded-lg bg-[#050608] border border-white/8">
+                    <div className="text-[#8793A3]">Reconnects</div>
+                    <div className="text-[#EDF5FF] mt-0.5">{liveSession.metrics.reconnectCount}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-xl bg-[#12161B] border border-white/10">
+                <div>
+                  <div className="text-sm font-medium text-[#EDF5FF]">Install XERO App (PWA)</div>
+                  <div className="text-xs text-[#8793A3]">
+                    {isInstalled
+                      ? 'Running as an installed standalone Progressive Web App.'
+                      : isIOS
+                        ? 'On iOS Safari, tap Share -> Add to Home Screen.'
+                        : 'Install as a standalone app with offline workspace controls (API traffic excluded from cache).'}
+                  </div>
+                </div>
+                {isInstalled ? (
+                  <span className="px-3 py-1.5 rounded-lg bg-[#39FF88]/15 border border-[#39FF88]/40 text-xs font-medium text-[#39FF88]">
+                    Installed
+                  </span>
+                ) : isInstallable ? (
+                  <button
+                    type="button"
+                    onClick={() => void install()}
+                    className="px-3 py-1.5 rounded-lg bg-[#00E5FF] text-[#050608] text-xs font-semibold hover:opacity-90 cursor-pointer"
+                  >
+                    Install App
+                  </button>
+                ) : (
+                  <span className="px-3 py-1.5 rounded-lg bg-[#050608] border border-white/12 text-xs text-[#8793A3]">
+                    {isIOS ? 'Use Share Sheet' : 'Use Browser Install'}
+                  </span>
+                )}
+              </div>
+
+              <div className="p-4 rounded-xl bg-[#12161B] border border-white/10 space-y-2 text-xs text-[#8793A3]">
                 <div className="text-sm font-semibold text-[#EDF5FF]">Window Lifecycle & Capability Boundaries</div>
                 <p>
                   XERO Dynamic Island, Teleprompter, and XERO Studio operate as independent surfaces. In browser preview, floating overlay positioning, Night Light/dimmer filter, Canvas image tools, and 2D snapshots work locally, while OS-wide global hotkeys, Bluetooth/Wi-Fi hardware toggles, OS backlight, and external app text injection require the Windows native Electron/Tauri host (see docs/CAPABILITY_STATUS.md).
                 </p>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-xl bg-[#12161B] border border-white/10">
+                <div>
+                  <div className="text-sm font-medium text-[#EDF5FF]">Complete Software Package (.zip)</div>
+                  <div className="text-xs text-[#8793A3]">
+                    Download unsigned portable source + dist + setup scripts (Windows/Linux/macOS) & legal docs.
+                  </div>
+                </div>
+                <a
+                  href="/api/release/download"
+                  download="XERO-Desktop-Suite.zip"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#00E5FF] text-[#050608] text-xs font-semibold hover:opacity-90 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download Zip</span>
+                </a>
               </div>
 
               <div className="flex items-center justify-between p-4 rounded-xl bg-[#12161B] border border-white/10">
@@ -1277,8 +1831,10 @@ export const XeroStudioWindow: React.FC<XeroStudioWindowProps> = ({ standalone =
               </div>
             </div>
           )}
+            </motion.div>
+          </AnimatePresence>
         </main>
       </div>
-    </section>
+    </motion.section>
   );
 };

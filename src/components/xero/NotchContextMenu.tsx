@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
   Activity,
   AppWindow,
@@ -8,6 +9,7 @@ import {
   BatteryCharging,
   Camera,
   CheckSquare,
+  ChevronUp,
   Clock,
   Droplets,
   ExternalLink,
@@ -19,6 +21,7 @@ import {
   Image as ImageIcon,
   Keyboard,
   Maximize2,
+  Mic,
   Moon,
   Music,
   Palette,
@@ -32,6 +35,7 @@ import {
   SkipBack,
   SkipForward,
   Sliders,
+  Sparkles,
   Square,
   Sun,
   Trash2,
@@ -39,8 +43,10 @@ import {
   Volume2,
   VolumeX,
   Wind,
+  Zap,
 } from 'lucide-react';
 import { xeroStore, useXeroStore } from '../../core/store';
+import { runOfflineEngine } from '../../core/offlineEngine';
 import { BUILTIN_TRACKS } from '../../core/audioEngine';
 import {
   APPEARANCE_PRESETS,
@@ -109,6 +115,7 @@ export const NotchContextMenu: React.FC = () => {
   const [prodView, setProdView] = useState<'lists' | 'stopwatch' | 'notes' | 'clocks'>('lists');
 
   const accent = settings.appearance.accentColor;
+  const reducedMotion = settings.appearance.reducedMotion;
   const activeTrack = BUILTIN_TRACKS[music.trackIndex % BUILTIN_TRACKS.length];
   const activeLyricIdx = useMemo(
     () => getActiveLyricIndex(activeTrack.lyrics, music.elapsedSec),
@@ -118,33 +125,50 @@ export const NotchContextMenu: React.FC = () => {
   return (
     <div
       data-testid="xero-context-menu"
-      className="border-t border-white/8 px-3.5 pb-3.5 pt-2.5 bg-[#030407]/98"
+      className="px-3 pb-3 pt-1"
     >
-      {/* Category Navigation Strip */}
-      <nav
-        aria-label="XERO contextual menu categories"
-        className="flex items-center gap-1 overflow-x-auto pb-2 mb-2.5 border-b border-white/8"
-      >
-        {MENU_CATEGORIES.map((cat) => {
-          const Icon = cat.icon;
-          const active = activeMenuCategory === cat.id;
-          return (
-            <button
-              key={cat.id}
-              type="button"
-              onClick={() => xeroStore.setMenuCategory(cat.id)}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                active
-                  ? 'bg-[#12161B] text-[#EDF5FF] border border-white/15'
-                  : 'text-[#8793A3] hover:text-[#EDF5FF] hover:bg-white/5 border border-transparent'
-              }`}
-            >
-              <Icon className="w-3.5 h-3.5" />
-              <span>{cat.label}</span>
-            </button>
-          );
-        })}
-      </nav>
+      <div className="rounded-[20px] bg-[#121317] border border-white/[0.07] p-3">
+        {/* Category Navigation Grid (all 8 categories visible cleanly without horizontal clipping) */}
+        <nav
+          aria-label="XERO contextual menu categories"
+          className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 pb-2.5 mb-2.5 border-b border-white/[0.07]"
+        >
+          {MENU_CATEGORIES.map((cat) => {
+            const Icon = cat.icon;
+            const active = activeMenuCategory === cat.id;
+            return (
+              <button
+                key={cat.id}
+                type="button"
+                onClick={() => xeroStore.setMenuCategory(cat.id)}
+                className={`relative flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-full text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer active:scale-[0.97] ${
+                  active
+                    ? 'text-[#050608]'
+                    : 'bg-[#1B1D24] text-white/75 hover:text-white hover:bg-[#252832]'
+                }`}
+              >
+                {active && (
+                  <motion.span
+                    layoutId={reducedMotion ? undefined : 'xero-menu-cat-pill'}
+                    transition={{ type: 'spring', stiffness: 460, damping: 32, mass: 0.6 }}
+                    className="absolute inset-0 rounded-full bg-white shadow-sm"
+                  />
+                )}
+                <Icon className="relative z-10 w-3.5 h-3.5 shrink-0" />
+                <span className="relative z-10">{cat.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={activeMenuCategory}
+            initial={reducedMotion ? false : { opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reducedMotion ? undefined : { opacity: 0, y: -3 }}
+            transition={{ duration: reducedMotion ? 0.01 : 0.11, ease: [0.16, 1, 0.3, 1] }}
+          >
 
       {/* 1. WIDGETS */}
       {activeMenuCategory === 'widgets' && (
@@ -212,7 +236,7 @@ export const NotchContextMenu: React.FC = () => {
                 if (islandPosition.docked) {
                   xeroStore.setIslandPosition({
                     docked: false,
-                    x: Math.round((window.innerWidth - 260) / 2),
+                    x: Math.round(window.innerWidth / 2),
                     y: 72,
                   });
                 } else {
@@ -225,6 +249,71 @@ export const NotchContextMenu: React.FC = () => {
               <Maximize2 className="w-3.5 h-3.5 text-[#9C6BFF]" />
               <span>{islandPosition.docked ? 'Float Free' : 'Re-dock'}</span>
             </button>
+          </div>
+
+          <div className="pt-1 border-t border-white/[0.06]">
+            <div className="text-[10px] uppercase tracking-wider text-[#8793A3] mb-1.5 px-0.5 flex items-center gap-1">
+              <Zap className="w-3 h-3" style={{ color: accent }} />
+              <span>J.A.R.V.I.S. Protocols</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+              {(
+                [
+                  { label: 'Focus 25m', cmd: 'focus protocol' },
+                  { label: 'Daily Brief', cmd: 'daily briefing' },
+                  { label: 'Meeting', cmd: 'meeting mode' },
+                  { label: 'Stealth Hide', cmd: 'stealth mode' },
+                ] as const
+              ).map((proto) => (
+                <button
+                  key={proto.label}
+                  type="button"
+                  onClick={() => {
+                    const snap = xeroStore.getSnapshot();
+                    const reply = runOfflineEngine(proto.cmd, snap.settings, snap.memories, {
+                      timersCount: snap.timers.length,
+                      runningTimersCount: snap.timers.filter((t) => t.running).length,
+                      remindersCount: snap.reminders.filter((r) => !r.completed).length,
+                      pendingTodosCount: snap.todos.filter((t) => !t.done).length,
+                      notesCount: snap.notes.length,
+                      waterMl: snap.waterMl,
+                      clipboardCount: snap.clipboard.length,
+                      filesCount: snap.files.length,
+                      isOnline: snap.isOnline,
+                      musicPlaying: snap.music.playing,
+                      activeTrackTitle: activeTrack.title,
+                      volume: snap.volume,
+                      muted: snap.muted,
+                      nightLight: snap.systemStatus.nightLight,
+                      brightness: snap.systemStatus.brightness,
+                      wakeLockActive: snap.systemStatus.wakeLockActive,
+                      batteryPct: snap.systemStatus.batteryPct,
+                      charging: snap.systemStatus.charging,
+                    });
+                    xeroStore.setMenuOpen(false);
+                    if (reply.actions?.length) {
+                      xeroStore.executeActions(reply.actions);
+                    } else if (reply.action) {
+                      xeroStore.executeOfflineAction(reply.action);
+                    }
+                    if (proto.cmd === 'daily briefing') {
+                      xeroStore.setIslandExpanded(true, 'chat');
+                      xeroStore.addMessage({
+                        role: 'assistant',
+                        text: reply.text,
+                        provider: 'offline',
+                        emotion: reply.emotion,
+                        actionsApplied: reply.actionLabels,
+                      });
+                    }
+                  }}
+                  className="flex items-center justify-center gap-1 px-2 py-1.5 rounded-xl bg-[#12161B] hover:bg-white/10 border border-white/8 text-[11px] font-medium text-[#EDF5FF] transition-colors cursor-pointer active:scale-[0.97]"
+                >
+                  <Sparkles className="w-3 h-3 shrink-0" style={{ color: accent }} />
+                  <span className="truncate">{proto.label}</span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -310,7 +399,8 @@ export const NotchContextMenu: React.FC = () => {
                 max={100}
                 value={muted ? 0 : volume}
                 onChange={(e) => xeroStore.setVolume(Number(e.target.value))}
-                className="flex-1 accent-[#00E5FF] cursor-pointer"
+                style={{ accentColor: accent }}
+                className="flex-1 cursor-pointer"
               />
               <span className="font-mono-tabular text-[11px] text-[#8793A3] w-10 text-right">
                 {muted ? 'MUTE' : `${volume}%`}
@@ -318,7 +408,7 @@ export const NotchContextMenu: React.FC = () => {
             </div>
 
             <div className="flex items-center justify-between gap-3 pt-1 border-t border-white/6">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <button
                   type="button"
                   onClick={() => xeroStore.toggleNightLight()}
@@ -331,6 +421,36 @@ export const NotchContextMenu: React.FC = () => {
                   <Moon className="w-3 h-3" />
                   <span>Night Light</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    xeroStore.updateSettings((p) => ({
+                      ...p,
+                      voice: { ...p.voice, wakeWordEnabled: !p.voice.wakeWordEnabled },
+                    }))
+                  }
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] border cursor-pointer ${
+                    settings.voice.wakeWordEnabled
+                      ? 'bg-[#39FF88]/15 border-[#39FF88]/50 text-[#39FF88]'
+                      : 'bg-[#050608] border-white/10 text-[#8793A3]'
+                  }`}
+                  title={`Toggle Voice Wakeup ("${settings.voice.wakeWord}")`}
+                >
+                  <Mic className="w-3 h-3" />
+                  <span>Wakeup</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    xeroStore.setMenuOpen(false);
+                    xeroStore.setIslandMode('minimized');
+                  }}
+                  className="flex items-center gap-1 px-2 py-1 rounded-lg bg-[#050608] border border-white/10 text-[11px] text-[#8793A3] hover:text-[#EDF5FF] cursor-pointer"
+                  title="Hide XERO up into the top bezel"
+                >
+                  <ChevronUp className="w-3 h-3" />
+                  <span>Hide</span>
+                </button>
               </div>
               <div className="flex items-center gap-2 flex-1 max-w-[230px]">
                 <Sun className="w-3.5 h-3.5 text-[#8793A3]" />
@@ -341,7 +461,8 @@ export const NotchContextMenu: React.FC = () => {
                   max={100}
                   value={systemStatus.brightness}
                   onChange={(e) => xeroStore.setBrightness(Number(e.target.value))}
-                  className="flex-1 accent-[#00E5FF] cursor-pointer"
+                  style={{ accentColor: accent }}
+                  className="flex-1 cursor-pointer"
                 />
                 <span className="font-mono-tabular text-[11px] text-[#8793A3] w-9 text-right">
                   {systemStatus.brightness}%
@@ -513,7 +634,8 @@ export const NotchContextMenu: React.FC = () => {
                 max={activeTrack.durationSec}
                 value={Math.floor(music.elapsedSec)}
                 onChange={(e) => xeroStore.seekMusic(Number(e.target.value))}
-                className="flex-1 accent-[#00E5FF] cursor-pointer"
+                style={{ accentColor: activeTrack.accent }}
+                className="flex-1 cursor-pointer"
               />
               <span className="font-mono-tabular text-[10px] text-[#8793A3] w-10 text-right">
                 -{formatClock(Math.max(0, activeTrack.durationSec - music.elapsedSec))}
@@ -938,9 +1060,9 @@ export const NotchContextMenu: React.FC = () => {
             })}
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
-            <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-[#12161B] border border-white/8">
-              <span className="text-[11px] text-[#8793A3]">Shape</span>
+          <div className="grid grid-cols-1 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] gap-2 pt-1">
+            <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-xl bg-[#12161B] border border-white/8 min-w-0">
+              <span className="text-[11px] text-[#8793A3] shrink-0">Shape</span>
               <div className="flex items-center gap-1">
                 {(['bezel', 'pill', 'squircle'] as NotchShape[]).map((shape) => (
                   <button
@@ -954,9 +1076,14 @@ export const NotchContextMenu: React.FC = () => {
                     }
                     className={`px-1.5 py-0.5 rounded text-[10px] capitalize cursor-pointer ${
                       settings.appearance.notchShape === shape
-                        ? 'bg-[#00E5FF] text-[#050608] font-semibold'
+                        ? 'text-[#050608] font-semibold'
                         : 'text-[#8793A3] hover:text-[#EDF5FF]'
                     }`}
+                    style={
+                      settings.appearance.notchShape === shape
+                        ? { backgroundColor: accent }
+                        : undefined
+                    }
                   >
                     {shape}
                   </button>
@@ -964,7 +1091,7 @@ export const NotchContextMenu: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-[#12161B] border border-white/8">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-[#12161B] border border-white/8 min-w-0 overflow-hidden">
               <span className="text-[11px] text-[#8793A3] shrink-0">Opacity</span>
               <input
                 type="range"
@@ -979,11 +1106,12 @@ export const NotchContextMenu: React.FC = () => {
                     appearance: { ...p.appearance, islandOpacity: parseFloat(e.target.value) },
                   }))
                 }
-                className="flex-1 accent-[#00E5FF] cursor-pointer"
+                style={{ accentColor: accent }}
+                className="flex-1 min-w-0 w-full cursor-pointer"
               />
             </div>
 
-            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-[#12161B] border border-white/8">
+            <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-xl bg-[#12161B] border border-white/8 min-w-0 overflow-hidden">
               <span className="text-[11px] text-[#8793A3] shrink-0">Edge Glow</span>
               <input
                 type="range"
@@ -998,12 +1126,38 @@ export const NotchContextMenu: React.FC = () => {
                     appearance: { ...p.appearance, borderIllumination: parseFloat(e.target.value) },
                   }))
                 }
-                className="flex-1 accent-[#00E5FF] cursor-pointer"
+                style={{ accentColor: accent }}
+                className="flex-1 min-w-0 w-full cursor-pointer"
               />
             </div>
           </div>
         </div>
       )}
+
+      {/* 8. STUDIO LAUNCHER */}
+      {activeMenuCategory === 'studio' && (
+        <div className="flex items-center justify-between gap-3 p-3 rounded-2xl bg-[#191B21] border border-white/[0.06]">
+          <div className="min-w-0">
+            <div className="text-xs font-semibold text-white">XERO Studio</div>
+            <div className="text-[11px] text-white/55 mt-0.5">
+              Independent window for Providers, Voice, Shortcuts, Personality, Appearance & Memory.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              xeroStore.openStudio();
+              xeroStore.setMenuOpen(false);
+            }}
+            className="px-3.5 py-1.5 rounded-full bg-white text-[#050608] text-xs font-semibold hover:opacity-90 shrink-0 cursor-pointer active:scale-[0.97] transition-transform"
+          >
+            Open Studio
+          </button>
+        </div>
+      )}
+          </motion.div>
+        </AnimatePresence>
+      </div>
     </div>
   );
 };

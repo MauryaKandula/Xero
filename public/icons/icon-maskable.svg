@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="xeroMaskGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00E5FF" />
+      <stop offset="100%" stop-color="#9C6BFF" />
+    </linearGradient>
+    <radialGradient id="xeroMaskBg" cx="50%" cy="50%" r="60%">
+      <stop offset="0%" stop-color="#0B0E12" />
+      <stop offset="100%" stop-color="#050608" />
+    </radialGradient>
+  </defs>
+
+  <!-- Full-bleed background for adaptive maskable icons -->
+  <rect width="512" height="512" fill="url(#xeroMaskBg)" />
+
+  <!-- Safe-zone centered emblem (all key geometry within center 64%) -->
+  <circle cx="256" cy="256" r="142" fill="#0B0E12" stroke="url(#xeroMaskGrad)" stroke-width="14" stroke-opacity="0.88" />
+  <rect x="156" y="202" width="200" height="108" rx="54" fill="#050608" stroke="#EDF5FF" stroke-width="7" stroke-opacity="0.25" />
+  <rect x="198" y="232" width="30" height="48" rx="15" fill="#EDF5FF" />
+  <rect x="284" y="232" width="30" height="48" rx="15" fill="#EDF5FF" />
+  <circle cx="256" cy="256" r="8.5" fill="url(#xeroMaskGrad)" />
+</svg>
